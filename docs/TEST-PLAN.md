@@ -226,6 +226,7 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | REL-08 | When another party spends the pool first, the pending settle is rebuilt on the new head and lands |
 | REL-09 | A settle never pays twice: after a reset, the original and the rebuilt transaction cannot both land |
 | REL-10 | The ASP gate: no ASP update while a Settle is pending, no Settle while an ASP update is pending, and a waiting ASP update holds new Settles |
+| REL-11 | Settles check roots and queue room against the sequencer head, keep a just-confirmed nullifier, wait instead of failing when the gate closes, and answer at the quote deadline |
 | SEQ-01 | The sequencer overlay shows pending outputs and hides pending spends |
 | SEQ-02 | A child chains on a pending output and both land in one block; the gates follow `maxPending` and the transaction kinds |
 | SEQ-03 | A dropped parent, a foreign spend, or an expired entry resets the chain, and reset listeners run after the lock is released |
@@ -233,6 +234,7 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | SEQ-05 | A throw inside `run` leaves the pending list unchanged |
 | SEQ-06 | `reconcile` waits for `run`, and queued work keeps FIFO order |
 | SEQ-07 | A waiting ASP update holds new Settles until it is submitted, and the hold expires after `aspHoldMs` |
+| SEQ-08 | Recently confirmed nullifiers stay known; reconcile reads every entry and counts an unknown read once per gap; submit refuses a closed gate; a dropped ASP update re-arms the hold; a child retry stops at its deadline |
 | SDK-01 | All notes are recovered from the seed plus indexer data |
 | SDK-02 | Sync downloads leaves in pages and never sends a commitment to the server |
 | SDK-03 | `settlePrivately` proves locally and never sends a secret |
