@@ -202,6 +202,8 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | TX-09 | The stealth leg-2 payment has one input, one output, and a fee equal to input minus price |
 | TX-12 | The FakeChain mines part of its mempool and drops a transaction with its descendants |
 | TX-13 | The FakeChain reports a transaction as in the mempool, confirmed, or unknown, and a spent input is a `SubmitRejected` with reason `bad_inputs` |
+| TX-14 | Blockfrost submit sorts a 400 answer into `SubmitRejected` (`bad_inputs` or `other`) and any other failure into an unknown outcome; `transactionStatus` reads the chain, then the mempool |
+| TX-15 | Insert and ASP update transactions carry an upper validity bound, 600,000 ms ahead by default |
 
 ## 11. Services and SDK
 
@@ -213,18 +215,26 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | CRK-01 | The crank triggers on the conditions in SPEC 8.3 |
 | CRK-02 | The crank builds a correct batch of queued notes, then deposits |
 | CRK-03 | The crank skips deposits that Insert would reject |
+| CRK-04 | An Insert chains on top of a pending Settle and both land in one block |
 | REL-01 | A quote covers payouts, the protocol fee, and the relayer fee |
 | REL-02 | A settle with a valid proof is built and submitted |
 | REL-03 | A settle with an invalid proof or a mismatched intent is refused before building |
 | REL-04 | A stale state root or ASP root returns the matching error code |
 | REL-05 | When another party spends the pool UTXO first, the relayer rebuilds and submits again |
 | REL-06 | Two settles chain inside one block window |
+| REL-07 | A dropped parent: the sequencer resets, the still-valid settles are rebuilt on the new head and land; a settle whose quote has expired ends `failed` |
+| REL-08 | When another party spends the pool first, the pending settle is rebuilt on the new head and lands |
+| REL-09 | A settle never pays twice: after a reset, the original and the rebuilt transaction cannot both land |
+| REL-10 | The ASP gate: no ASP update while a Settle is pending, no Settle while an ASP update is pending, and a waiting ASP update holds new Settles |
+| REL-11 | Settles check roots and queue room against the sequencer head, keep a just-confirmed nullifier, wait instead of failing when the gate closes, and answer at the quote deadline |
 | SEQ-01 | The sequencer overlay shows pending outputs and hides pending spends |
 | SEQ-02 | A child chains on a pending output and both land in one block; the gates follow `maxPending` and the transaction kinds |
 | SEQ-03 | A dropped parent, a foreign spend, or an expired entry resets the chain, and reset listeners run after the lock is released |
 | SEQ-04 | One unknown read does not reset; a child refused with `BadInputsUTxO` is retried; an unknown submit outcome stays pending |
 | SEQ-05 | A throw inside `run` leaves the pending list unchanged |
 | SEQ-06 | `reconcile` waits for `run`, and queued work keeps FIFO order |
+| SEQ-07 | A waiting ASP update holds new Settles until it is submitted, and the hold expires after `aspHoldMs` |
+| SEQ-08 | Recently confirmed nullifiers stay known; reconcile reads every entry and counts an unknown read once per gap; submit refuses a closed gate; a dropped ASP update re-arms the hold; a child retry stops at its deadline |
 | SDK-01 | All notes are recovered from the seed plus indexer data |
 | SDK-02 | Sync downloads leaves in pages and never sends a commitment to the server |
 | SDK-03 | `settlePrivately` proves locally and never sends a secret |
@@ -252,6 +262,7 @@ Its cases reuse four IDs for what they check:
 | E2E-02 | The exit returns the rest. The pool ends with its reserve plus fees. |
 | E2E-03 | A second run on the same chain and store works. |
 | E2E-04 | The node keeps running when one round fails. |
+| E2E-18 | The node chains two private payments in one block with `maxPending: 2`. This is a local test, not a canary step. |
 
 ### Admin actions (`ADM`)
 

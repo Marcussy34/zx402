@@ -692,7 +692,12 @@ Behavior:
 - The relayer keeps a local copy of the pool state and chains transactions. One relayer can advance the pool several times per block.
 - It rebuilds a transaction when another party spends the pool UTXO first.
 - It holds hot keys with small balances only: a fee wallet and a collateral UTXO.
-- M0 status: the relayer does not chain. It waits for confirmation between pool transactions and rebuilds when another party wins the block. The proof fixes `withdrawn`; the validator fixes only the protocol fee. The SDK caps the quoted relayer fee at 2,000,000 pool asset base units unless the caller raises `maxRelayerFee`.
+- The node runs one sequencer over the pool UTXO. The relayer, crank and ASP service build on its head and submit through it. The head is the newest pool output, confirmed or pending.
+- `ZX402_MAX_PENDING` caps pending Settles and Inserts together. It is an integer from 1 to 8, and the default is 1.
+- Each node round reconciles the pending list by transaction status. An entry that is neither confirmed nor in the mempool on two reads at least 5 seconds apart counts as dropped. The sequencer then resets. An entry past its upper validity bound also resets it. Settles take that bound from the quote. Inserts and ASP updates carry one 10 minutes ahead.
+- After a reset the relayer rebuilds each dropped Settle whose quote is still valid. A rebuild cannot pay twice, because the Settle validator inserts each nullifier once.
+- A refused submit pauses, reconciles, and tries again on the current head, up to three attempts. A lost reply stays `uncertain`.
+- The proof fixes `withdrawn`; the validator fixes only the protocol fee. The SDK caps the quoted relayer fee at 2,000,000 pool asset base units unless the caller raises `maxRelayerFee`.
 - The SDK and relayer use a payout floor of 1 base unit in a token pool. An ADA pool requires 1,000,000 lovelace (1 ADA).
 - `payoutLovelace` is the ADA attached to each token payout, in lovelace. It defaults to 2,000,000 in a token pool and is 0 in an ADA pool.
 - In a token pool, the relayer charges `relayerFee * payoutCount`, with a default rate of 1 tUSDM per payout. Each payout costs the relayer `payoutLovelace` of its own ADA. The quote's `relayerFee` is the total charge, included in `withdrawn` with the payout amounts and protocol fee.
@@ -708,6 +713,7 @@ The ADA pool keeps one fee per quote.
 - Proving takes about 5 to 15 seconds on a server (estimate).
 - Anyone can run it with the open-source prover. A note owner can insert their own note if our crank is down (INV-7).
 - Only deposits pay a crank fee in v1. Note inserts are funded from relayer fees.
+- An Insert can chain on pending Settles. At most one Insert is pending at a time.
 
 ### 8.4 Indexer
 
@@ -722,6 +728,8 @@ The ADA pool keeps one fee per quote.
 - Builds the ASP tree of approved labels and posts the root.
 - Approves by default after a delay unless a deposit is flagged. This mirrors the Base implementation. M0 status: it approves at once, and a deny function can refuse a deposit. No delay and no data source are built.
 - Auto-approves deposits funded only by pool payouts, such as returned one-time funds.
+- No ASP update is submitted while a Settle is pending. No Settle is submitted while an ASP update is pending.
+- A waiting ASP update holds new Settles for at most two minutes, so approvals cannot starve.
 - The screening data source for Cardano is an open question (PRD section 14).
 
 ### 8.6 Libraries and providers
@@ -1049,7 +1057,7 @@ For reference, TrustLevel paid 0.56 ADA in total for its 5-input proof transacti
 - A settle plus its share of an insert uses about 3.6B CPU.
 - A 20B block fits about 5 of those, if the pool had the block to itself.
 - That is about 20,000 private payments a day as a hard ceiling. Real capacity is lower.
-- Transaction chaining lets one relayer use several slots in the same block.
+- The node chains pool transactions through its sequencer, up to `ZX402_MAX_PENDING` pending at once, so the pool can use several slots in the same block. [measurements.md](./measurements.md) records the measured runs.
 
 ## 11. Trusted setup and artifacts
 

@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { setImmediate } from 'node:timers/promises';
 import { test } from 'node:test';
 import {
-  Sequencer, SubmitRejected, decodeTx, enterpriseAddress, newTxBuilder, signTx,
+  Sequencer, SubmitRejected, decodeTx, enterpriseAddress, newTxBuilder, signTx, slotToTime,
   type ChainContext, type Deployment, type PoolTxKind, type Provider, type ResetEvent, type TxStatusReader, type Utxo,
 } from '../src/index.js';
 import { FakeChain } from '../src/testing/fake-chain.js';
@@ -117,13 +117,15 @@ test('SEQ-02 maxPending must be an integer from one to eight', () => {
 
 test('SEQ-03 a dropped parent resets the chain', async () => {
   const { chain, ctx } = setup();
-  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2 });
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2, now: () => now });
   const parent = await submit(sequencer, 0, 1, 'settle', 11n);
   const child = await submit(sequencer, 1, 2, 'settle', 22n);
   const events: ResetEvent[] = [];
   sequencer.onReset(event => { events.push(event); });
   assert.deepEqual(chain.dropTransaction(parent.txId), [parent.txId, child.txId]);
   assert.equal(await sequencer.reconcile(), null);
+  now += 5_000;
   const event = await sequencer.reconcile();
   assert.equal(event?.reason, 'dropped');
   assert.deepEqual(event.dropped.map(entry => entry.txId), [parent.txId, child.txId]);
@@ -136,12 +138,14 @@ test('SEQ-03 a dropped parent resets the chain', async () => {
 
 test('SEQ-03 a foreign spend resets the chain as dropped', async () => {
   const { chain, ctx } = setup();
-  const sequencer = new Sequencer({ ctx, status: chain });
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, now: () => now });
   const parent = await submit(sequencer);
   chain.dropTransaction(parent.txId);
   const conflict = await chain.submit(await payment(ctx, 0, 2));
   assert.deepEqual(chain.mineBlock().txIds, [conflict]);
   assert.equal(await sequencer.reconcile(), null);
+  now += 5_000;
   assert.equal((await sequencer.reconcile())?.reason, 'dropped');
 });
 
@@ -203,7 +207,8 @@ test('SEQ-04 a child with BadInputsUTxO is retried', async () => {
     }
     return chain.submit(cbor);
   } });
-  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, maxPending: 2, childRetryMs: 1 });
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, maxPending: 2,
+    childRetryMs: 1, now: () => slotToTime(100) });
   const parent = await submit(sequencer);
   const child = await submit(sequencer, 1, 2);
   assert.equal(child.status, 'accepted');
@@ -224,6 +229,16 @@ test('SEQ-04 an ambiguous submit stays pending and can confirm', async () => {
   assert.deepEqual(chain.mineBlock().txIds, [result.txId]);
   assert.equal(await sequencer.reconcile(), null);
   assert.deepEqual(sequencer.pending(), []);
+});
+
+test('SEQ-04 an unknown outcome logs the provider diagnostic on one line', async () => {
+  const { chain, ctx } = setup();
+  const provider = providerWith(chain, { submit: async () => { throw new Error('socket hang up\nafter 30 s'); } });
+  const logs: string[] = [];
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, log: line => { logs.push(line); } });
+  const result = await submit(sequencer);
+  assert.equal(result.status, 'unknown');
+  assert.deepEqual(logs, [`Sequencer submit outcome unknown for ${result.txId}: socket hang up after 30 s`]);
 });
 
 test('SEQ-04 a rejected nonchild has no entry and does not reset', async () => {
@@ -262,22 +277,24 @@ test('SEQ-04 an exhausted child resets after run releases the lock', { timeout: 
   assert.deepEqual(sequencer.pending(), []);
 });
 
-test('SEQ-04 mempool resets unseen and reconciliation stops at the oldest pending entry', async () => {
+test('SEQ-04 mempool resets unseen and reconciliation checks every pending entry', async () => {
   const { chain, ctx } = setup();
   const statuses = ['unknown', 'mempool', 'unknown'] as const;
   const reads: string[] = [];
   const status: TxStatusReader = { transactionStatus: async txId => {
     reads.push(txId);
-    return statuses[reads.length - 1] ?? 'mempool';
+    return statuses[Math.floor((reads.length - 1) / 2)] ?? 'mempool';
   } };
-  const sequencer = new Sequencer({ ctx, status, maxPending: 2 });
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status, maxPending: 2, now: () => now });
   const parent = await submit(sequencer);
-  await submit(sequencer, 1, 2);
+  const child = await submit(sequencer, 1, 2);
   for (const unseen of [1, 0, 1]) {
     assert.equal(await sequencer.reconcile(), null);
-    assert.equal(sequencer.pending()[0]!.unseen, unseen);
+    assert.deepEqual(sequencer.pending().map(entry => entry.unseen), [unseen, unseen]);
+    now += 5_000;
   }
-  assert.deepEqual(reads, [parent.txId, parent.txId, parent.txId]);
+  assert.deepEqual(reads, [parent.txId, child.txId, parent.txId, child.txId, parent.txId, child.txId]);
 });
 
 test('SEQ-04 confirmed parents are removed while their child stays pending', async () => {
@@ -337,4 +354,227 @@ test('SEQ-06 queued runs keep FIFO order after a callback throws', async () => {
   release.resolve();
   await Promise.all([rejected, second, third]);
   assert.deepEqual(order, [2, 3]);
+});
+
+test('SEQ-07 a held sequencer admits no new settle until the ASP update is submitted', async () => {
+  const { chain, ctx } = setup();
+  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2 });
+  await submit(sequencer, 0, 1, 'settle', 11n);
+  // maxPending 2 leaves room for another Settle.
+  assert.equal(sequencer.canSubmit('settle'), true);
+  sequencer.holdForAsp();
+  assert.equal(sequencer.canSubmit('settle'), false);
+  // A hold only stops Settles.
+  assert.equal(sequencer.canSubmit('insert'), true);
+  // The held Settle confirms, so the ASP update is now free to go.
+  chain.mineBlock();
+  assert.equal(await sequencer.reconcile(), null);
+  assert.equal(sequencer.canSubmit('asp'), true);
+  const update = await submit(sequencer, 1, 2, 'asp');
+  assert.equal(update.status, 'accepted');
+  // The ASP entry itself blocks Settles until it confirms.
+  assert.equal(sequencer.canSubmit('settle'), false);
+  chain.mineBlock();
+  assert.equal(await sequencer.reconcile(), null);
+  assert.equal(sequencer.canSubmit('settle'), true);
+});
+
+test('SEQ-07 a hold expires after aspHoldMs', () => {
+  const { chain, ctx } = setup();
+  let now = 1_000;
+  const sequencer = new Sequencer({ ctx, status: chain, aspHoldMs: 5_000, now: () => now });
+  sequencer.holdForAsp();
+  assert.equal(sequencer.canSubmit('settle'), false);
+  now += 4_999;
+  assert.equal(sequencer.canSubmit('settle'), false);
+  now += 1;
+  assert.equal(sequencer.canSubmit('settle'), true);
+});
+
+test('SEQ-07 aspHoldMs must be a positive safe integer, and defaults to 120000', () => {
+  const { chain, ctx } = setup();
+  for (const aspHoldMs of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new Sequencer({ ctx, status: chain, aspHoldMs }), RangeError);
+  }
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, now: () => now });
+  sequencer.holdForAsp();
+  now = 119_999;
+  assert.equal(sequencer.canSubmit('settle'), false);
+  now = 120_000;
+  assert.equal(sequencer.canSubmit('settle'), true);
+});
+
+test('SEQ-08 a confirmed settle nullifier stays in recentNullifiers', async () => {
+  const { chain, ctx, input } = setup();
+  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2, unseenLimit: 1 });
+  for (let n = 1; n <= 65; n++) {
+    if (n > 1) chain.addUtxo({ ...input, ref: { txId: n.toString(16).padStart(64, '0'), index: 0 } });
+    await submit(sequencer, 0, 1, 'settle', BigInt(n));
+    if (n === 1) assert.deepEqual(sequencer.recentNullifiers(), [1n]);
+    chain.mineBlock(0);
+    assert.equal(await sequencer.reconcile(), null);
+    if (n === 1) assert.deepEqual(sequencer.recentNullifiers(), [1n]);
+  }
+  const remembered = Array.from({ length: 64 }, (_, i) => BigInt(i + 2));
+  assert.deepEqual(sequencer.recentNullifiers(), remembered);
+  assert.deepEqual(sequencer.pendingNullifiers(), []);
+  const dropped = await submit(sequencer, 1, 2, 'settle', 65n);
+  await submit(sequencer, 2, 0, 'settle', 66n);
+  assert.deepEqual(sequencer.pendingNullifiers(), [65n, 66n]);
+  assert.deepEqual(sequencer.recentNullifiers(), [...remembered, 66n]);
+  sequencer.recentNullifiers().pop();
+  assert.deepEqual(sequencer.recentNullifiers(), [...remembered, 66n]);
+  chain.dropTransaction(dropped.txId);
+  assert.equal((await sequencer.reconcile())?.reason, 'dropped');
+  assert.deepEqual(sequencer.recentNullifiers(), remembered);
+});
+
+test('SEQ-08 reconcile removes a confirmed ASP entry behind a pending Insert', async () => {
+  const { chain, ctx, input } = setup();
+  chain.addUtxo({ ...input, ref: { txId: '20'.repeat(32), index: 0 }, address: addresses[2]! });
+  let insertId = '';
+  const reads: string[] = [];
+  const status: TxStatusReader = { transactionStatus: async txId => {
+    reads.push(txId);
+    // The Insert status lags behind the independent ASP confirmation.
+    return txId === insertId ? 'mempool' : chain.transactionStatus(txId);
+  } };
+  const sequencer = new Sequencer({ ctx, status });
+  insertId = (await submit(sequencer, 0, 1, 'insert')).txId;
+  const asp = await submit(sequencer, 2, 0, 'asp');
+  chain.mineBlock(0);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(reads, [insertId, asp.txId]);
+  assert.deepEqual(sequencer.pending().map(entry => entry.txId), [insertId]);
+  assert.equal(sequencer.canSubmit('asp'), true);
+});
+
+test('SEQ-08 an unknown child behind a mempool parent is counted and resets after unseenLimit', async () => {
+  const { chain, ctx } = setup();
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2, unseenGapMs: 100, now: () => now });
+  const parent = await submit(sequencer);
+  const child = await submit(sequencer, 1, 2);
+  chain.dropTransaction(child.txId);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending().map(entry => entry.unseen), [0, 1]);
+  now += 101;
+  const event = await sequencer.reconcile();
+  assert.equal(event?.reason, 'dropped');
+  assert.deepEqual(event.dropped.map(entry => entry.txId), [parent.txId, child.txId]);
+  assert.deepEqual(sequencer.pending(), []);
+});
+
+test('SEQ-08 two reconciles within unseenGapMs count one unknown read', async () => {
+  const { chain, ctx } = setup();
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, now: () => now });
+  const result = await submit(sequencer);
+  chain.dropTransaction(result.txId);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.equal(await sequencer.reconcile(), null);
+  now = 4_999;
+  assert.equal(await sequencer.reconcile(), null);
+  assert.equal(sequencer.pending()[0]!.unseen, 1);
+  now = 5_000;
+  assert.equal((await sequencer.reconcile())?.reason, 'dropped');
+});
+
+test('SEQ-08 unseenGapMs must be a positive safe integer', () => {
+  const { chain, ctx } = setup();
+  for (const unseenGapMs of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new Sequencer({ ctx, status: chain, unseenGapMs }), RangeError);
+  }
+});
+
+test('SEQ-08 submit refuses when the gate is closed', async () => {
+  for (const [pendingKind, kind, maxPending] of [
+    ['insert', 'insert', 2], ['settle', 'settle', 1], ['settle', 'insert', 1],
+    ['settle', 'asp', 2], ['asp', 'settle', 2], ['asp', 'asp', 2],
+  ] as const) {
+    const { chain, ctx } = setup();
+    let calls = 0;
+    const provider = providerWith(chain, { submit: cbor => { calls++; return chain.submit(cbor); } });
+    const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, maxPending });
+    await submit(sequencer, 0, 1, pendingKind);
+    const pending = sequencer.pending();
+    await assert.rejects(submit(sequencer, 1, 2, kind), new RegExp(`gate.*closed.*${kind}`, 'i'));
+    assert.equal(calls, 1);
+    assert.deepEqual(sequencer.pending(), pending);
+  }
+  const { chain, ctx } = setup();
+  const sequencer = new Sequencer({ ctx, status: chain });
+  sequencer.holdForAsp();
+  await assert.rejects(submit(sequencer), /gate.*closed.*settle/i);
+  assert.deepEqual(chain.mempoolTxIds(), []);
+});
+
+test('SEQ-08 a dropped ASP update re-arms the hold', async () => {
+  const { chain, ctx } = setup();
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, unseenLimit: 1, aspHoldMs: 100, now: () => now });
+  sequencer.holdForAsp();
+  const asp = await submit(sequencer, 0, 1, 'asp');
+  now = 200;
+  chain.dropTransaction(asp.txId);
+  sequencer.onReset(() => { assert.equal(sequencer.canSubmit('settle'), false); });
+  assert.equal((await sequencer.reconcile())?.reason, 'dropped');
+  assert.equal(sequencer.canSubmit('settle'), false);
+  assert.equal(sequencer.canSubmit('asp'), true);
+  assert.equal(sequencer.canSubmit('insert'), true);
+  now = 299;
+  assert.equal(sequencer.canSubmit('settle'), false);
+  now = 300;
+  assert.equal(sequencer.canSubmit('settle'), true);
+});
+
+test('SEQ-08 a child retry stops at the transaction deadline', async () => {
+  const { chain, ctx } = setup();
+  const deadline = slotToTime(105, 'preprod');
+  let now = deadline - 2;
+  let calls = 0;
+  const provider = providerWith(chain, { submit: cbor => {
+    if (decodeTx(cbor).inputs.some(ref => ref.txId !== '10'.repeat(32))) {
+      calls++;
+      // The clock reaches expiry while the retry timer is waiting.
+      queueMicrotask(() => { now = deadline; });
+      throw new SubmitRejected('BadInputsUTxO', 'bad_inputs');
+    }
+    return chain.submit(cbor);
+  } });
+  const sequencer = new Sequencer({ ctx: { provider, deployment: { ...deployment, network: 'preprod' } },
+    status: chain, maxPending: 2, childRetryMs: 1, childRetryForMs: 100, now: () => now });
+  const parent = await submit(sequencer);
+  const child = await payment(sequencer.ctx, 1, 2, 105);
+  const events: ResetEvent[] = [];
+  sequencer.onReset(event => { events.push(event); });
+  const result = await sequencer.run(() => sequencer.submit(child, { kind: 'settle' }));
+  assert.equal(result.status, 'rejected');
+  assert.equal(calls, 1);
+  assert.deepEqual(events.map(event => event.reason), ['rejected_child']);
+  assert.deepEqual(events[0]!.dropped.map(entry => entry.txId), [parent.txId]);
+  assert.deepEqual(sequencer.pending(), []);
+});
+
+test('SEQ-08 a child retry uses now without a transaction upper bound', async () => {
+  const { chain, ctx } = setup();
+  let now = 0;
+  let calls = 0;
+  const provider = providerWith(chain, { submit: cbor => {
+    if (decodeTx(cbor).inputs.some(ref => ref.txId !== '10'.repeat(32))) {
+      calls++;
+      queueMicrotask(() => { now = 100; });
+      throw new SubmitRejected('BadInputsUTxO', 'bad_inputs');
+    }
+    return chain.submit(cbor);
+  } });
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, maxPending: 2,
+    childRetryMs: 1, childRetryForMs: 100, now: () => now });
+  await submit(sequencer);
+  const child = await payment(sequencer.ctx, 1, 2, null);
+  const result = await sequencer.run(() => sequencer.submit(child, { kind: 'settle' }));
+  assert.equal(result.status, 'rejected');
+  assert.equal(calls, 1);
+  assert.deepEqual(sequencer.pending(), []);
 });

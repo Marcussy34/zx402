@@ -213,7 +213,7 @@ Behavior (design 5.3, 5.7, 5.8):
   2. Inside `sequencer.run`, read `pool = await readPool(sequencer.ctx)` and run today's checks against it: `stateRoot`, `aspRoot`, spent nullifier and queue. The spent list is the indexer's list plus `sequencer.pendingNullifiers()`. `nullifierInsertion` uses that combined list. Its `oldRoot` must equal `pool.datum.nullifierRoot`, with today's retry when the indexer is behind. Build with `buildSettle(sequencer.ctx, ...)`, sign, then call `sequencer.submit(signed, { kind: 'settle', nullifier })`.
   3. On `accepted`, record and return `submitted`, as today. On `unknown`, keep today's `uncertain` path. On `rejected`, call `sequencer.reconcile()`, wait `retryDelayMs`, and try again. After 3 attempts, throw `internal`, as today.
 - Keep each sent request: `Submission` gains `request: SettleRequest` and `txHashes: string[]`.
-- Register `sequencer.onReset`. For each dropped Settle entry whose submission exists, whose nullifier is not confirmed and whose quote is still valid, queue a rebuild on `this.serial`. The rebuild uses the same attempt path and pushes the new hash to `txHashes`. Otherwise leave the entry for `getSettle`'s expiry rule.
+- Register `sequencer.onReset`. The listener only enqueues work and never awaits a rebuild, because listeners run while the caller of `run` or `reconcile` waits. For each dropped Settle entry whose submission exists, whose nullifier is not confirmed and whose quote is still valid, queue a rebuild on `this.serial`. The rebuild uses the same attempt path and pushes the new hash to `txHashes`. Otherwise leave the entry for `getSettle`'s expiry rule.
 - A rebuild that ends `rejected` or throws leaves the submission as it is. A reset can be wrong while the indexer lags, and the original may have landed. `getSettle` decides the final status from the nullifier and the deadline.
 - `getSettle`: keep today's rules. When it reports `confirmed`, `txHash` is the entry of `txHashes` whose `sequencer.transactionStatus` is `'confirmed'`. Fall back to the last one.
 
@@ -244,7 +244,8 @@ Behavior (design 5.3, 5.7, 5.8):
 **Files:**
 - Modify: `services/crank/src/crank.ts`
 - Modify: `services/asp/src/asp.ts`
-- Test: `services/crank/test/crank.test.ts`, and the ASP service test file in `services/asp/test/`
+- Test: `services/crank/test/crank.test.ts`, `services/asp/test/asp.test.ts`
+- Modify: `packages/sdk/test/sdk.test.ts` (its harnesses build a relayer, a crank and an ASP service: give each harness one shared `Sequencer`, as the node will)
 - Modify: `docs/TEST-PLAN.md` (CRK-04, REL-10), `docs/SPEC.md` 8.3 and 8.5
 
 **Interfaces:**
@@ -281,6 +282,25 @@ Behavior:
   - 8.3 gets one line: an Insert can chain on pending Settles, with at most one Insert pending.
   - 8.5 gets the ASP gate.
   - `git commit -m "crank, asp: Inserts and ASP updates go through the sequencer"`
+
+---
+
+### Task 5b: A waiting ASP update holds new Settles
+
+**Files:**
+- Modify: `packages/txlib/src/sequencer.ts`, `services/asp/src/asp.ts`
+- Test: `packages/txlib/test/sequencer.test.ts`, `services/asp/test/asp.test.ts`
+
+**Interfaces:**
+- Produces: `Sequencer` constructor options `aspHoldMs?: number` (default 120,000) and `now?: () => number` (default `Date.now`), and the method `holdForAsp(): void`.
+- While a hold is active, `canSubmit('settle')` is false. A hold ends when an `asp` entry is submitted (`accepted` or `unknown`), or when `aspHoldMs` has passed since the last `holdForAsp()` call.
+- `AspService.update()` calls `sequencer.holdForAsp()` when it has a new root to publish but `canSubmit('asp')` is false.
+
+- [ ] **Step 1: Write the failing tests.** `SEQ-07 a held sequencer admits no new settle until the ASP update is submitted` (with `maxPending: 2` and one Settle pending, after `holdForAsp()` `canSubmit('settle')` is false; after an `asp` submit it stays false only because the ASP update is pending, and after it confirms and `reconcile()`, it is true). `SEQ-07 a hold expires after aspHoldMs` (injected `now`). `REL-10 a waiting ASP update holds new settles` in `asp.test.ts`.
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the txlib and ASP suites.** Expected: PASS.
+- [ ] **Step 5: Commit.** `git commit -m "sequencer, asp: a waiting ASP update holds new settles, so approvals cannot starve"`
 
 ---
 

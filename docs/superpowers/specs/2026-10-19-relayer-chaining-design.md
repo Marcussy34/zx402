@@ -159,6 +159,8 @@ Two independent transactions can reach a remote node in either order, so the seq
 - The sequencer does not submit a Settle while an ASP update is pending.
 
 The cost is at most one block of waiting around each ASP update.
+
+Under steady traffic a Settle may always be pending, so the ASP update could wait forever and new deposits would never be approved. So when the ASP service has an update waiting, it asks the sequencer to hold: the sequencer admits no new Settle until the update is submitted, for at most 2 minutes. The pending Settles land, the update goes out, and Settles resume.
 An ASP update also changes the ASP root, so proofs made against the old root become stale. The SDK already retries on `stale_asp_root` (`packages/sdk/src/sdk.ts:376`).
 
 The admin command updates the config output. CAUTION: running it while Settles are pending drops them. The runbook must say to run it only when the sequencer has nothing pending. If it happens anyway, section 5.7 recovers.

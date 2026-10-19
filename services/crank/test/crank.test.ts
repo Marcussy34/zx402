@@ -4,12 +4,12 @@ import { fileURLToPath } from 'node:url';
 import type { IndexerApi } from '@zx402/api';
 import {
   MerkleTree, NETWORKS, commitment, contextFor, deriveNoteSecrets, insertWitness,
-  precommitment, spendWitness, type Note,
+  nullifierHash, precommitment, spendWitness, type Note,
 } from '@zx402/crypto';
 import { devKeysPresent, loadDevArtifacts, prove, shutdown } from '@zx402/prover';
 import {
-  buildAspUpdate, buildDeposit, buildSettle, decodeTx, encodeDepositDatum, enterpriseAddress, keyHash,
-  nullifierInsertion, planInsert, readAsp, readConfig, readDeposits, readPool,
+  Sequencer, buildAspUpdate, buildDeposit, buildSettle, decodeTx, encodeDepositDatum, enterpriseAddress, keyHash,
+  nullifierInsertion, planInsert, readAsp, readConfig, readDeposits, readPool, signTx,
 } from '@zx402/txlib';
 import { startDevnet } from '@zx402/txlib/testing/devnet';
 import { Crank } from '../src/index.js';
@@ -50,7 +50,8 @@ test('CRK-01, CRK-02, CRK-03: real proof crank rounds', {
     },
   };
   const artifacts = await loadDevArtifacts('insert', repoRoot);
-  const crank = new Crank({ ctx, indexer, seed: keys.crank, artifacts });
+  const sequencer = new Sequencer({ ctx, status: chain });
+  const crank = new Crank({ ctx, indexer, seed: keys.crank, artifacts, sequencer });
   let submissions = 0;
   const submit = chain.submit.bind(chain);
   chain.submit = async cbor => { submissions++; return submit(cbor); };
@@ -73,6 +74,8 @@ test('CRK-01, CRK-02, CRK-03: real proof crank rounds', {
     assert.equal((await readPool(ctx)).datum.size, tree.size, 'submission does not imply confirmation');
     const block = chain.mineBlock();
     assert.ok(block.txIds.includes(result.txId));
+    // The node reconciles after each block, so the confirmed Insert leaves the pending list.
+    await sequencer.reconcile();
     leaves.push(...expected.leaves);
     tree = expected.tree;
     const next = await readPool(ctx);
@@ -161,6 +164,7 @@ test('CRK-01, CRK-02, CRK-03: real proof crank rounds', {
     } finally {
       indexer.getLeaves = getLeaves;
       chain.mineBlock();
+      await sequencer.reconcile();
       leaves.push(...expected.leaves);
       tree = expected.tree;
     }
@@ -168,25 +172,86 @@ test('CRK-01, CRK-02, CRK-03: real proof crank rounds', {
     assert.equal((await insert()).deposits.length, 1);
     assert.equal(submissions, before + 3);
   });
-  for (const retryAfterMs of [undefined, 50]) {
-    await t.test(`CRK-01: a dropped insertion retries after ${retryAfterMs ?? 'the default'} delay`, async () => {
-      await deposit(0, 10_000_000n);
-      let now = 1000;
-      const retrying = new Crank({ ctx, indexer, seed: keys.crank, artifacts, now: () => now,
-        ...(retryAfterMs === undefined ? {} : { retryAfterMs }) });
-      const original = chain.submit;
-      let attempts = 0;
-      chain.submit = async cbor => { attempts++; return decodeTx(cbor).txId; };
-      try {
-        assert.ok(await retrying.tick());
-        now += (retryAfterMs ?? 180_000) - 1;
-        assert.equal(await retrying.tick(), null);
-        assert.equal(attempts, 1);
-        now++;
-        assert.ok(await retrying.tick());
-        assert.equal(attempts, 2);
-      } finally { chain.submit = original; }
-      await insert();
+  await t.test('CRK-01: a dropped insertion retries after two reconciles', async () => {
+    await deposit(0, 10_000_000n);
+    // The sequencer counts a missing read once per unseenGapMs, so the test steps its clock between reconciles.
+    let skew = 0;
+    const retrySequencer = new Sequencer({ ctx, status: chain, now: () => Date.now() + skew });
+    const retrying = new Crank({ ctx, indexer, seed: keys.crank, artifacts, sequencer: retrySequencer });
+    const original = chain.submit.bind(chain);
+    let attempts = 0;
+    chain.submit = async cbor => { attempts++; return original(cbor); };
+    try {
+      const first = await retrying.tick();
+      assert.ok(first);
+      assert.equal(attempts, 1);
+      // While the Insert is pending and not dropped, another round submits nothing.
+      assert.equal(await retrying.tick(), null);
+      assert.equal(attempts, 1);
+      // Two unknown status reads in a row mean the transaction was dropped.
+      chain.dropTransaction(first.txId);
+      assert.equal(await retrySequencer.reconcile(), null);
+      skew += 5_000;
+      assert.equal((await retrySequencer.reconcile())?.reason, 'dropped');
+      const plan = planInsert({ poolId: ctx.deployment.poolId, pool: await readPool(ctx),
+        config: (await readConfig(ctx)).datum, deposits: await readDeposits(ctx) });
+      assert.ok(plan);
+      const second = await retrying.tick();
+      assert.ok(second);
+      assert.equal(attempts, 2);
+      assert.deepEqual(chain.mempoolTxIds(), [second.txId]);
+      // Confirm the retried Insert so the next round starts from a clean head.
+      chain.mineBlock();
+      await retrySequencer.reconcile();
+      const expected = insertWitness({ tree, slots: plan.slots });
+      leaves.push(...expected.leaves);
+      tree = expected.tree;
+    } finally { chain.submit = original; }
+  });
+  await t.test('CRK-04: an Insert chains on top of a pending Settle', async () => {
+    // User 2's deposit nullifier is still unspent, so this note can settle once.
+    await deposit(2, 20_000_000n);
+    const stateIndex = tree.size;
+    const plan = await insert();
+    const creditIndex = plan.deposits.findIndex(d => d.datum.refund === hex(keyHash(keys.users[2]!)));
+    assert.ok(creditIndex >= 0);
+    const note: Note = { ...secrets[2]!, ...plan.credited[creditIndex]! };
+    assert.equal(tree.leaf(stateIndex), commitment(note));
+    // The spend proof needs the note's label in the confirmed ASP tree.
+    const aspTree = MerkleTree.fromLeaves([note.label]);
+    await run(await buildAspUpdate(ctx, { payer: payer(keys.asp), root: aspTree.root,
+      signers: [hex(keyHash(keys.asp))] }), [keys.asp]);
+    const intent = { poolId: Buffer.from(ctx.deployment.poolId, 'hex'), relayer: keyHash(keys.relayer),
+      payouts: [{ address: { payment: { kind: 'key' as const, hash: keyHash(keys.users[0]!) }, stake: null },
+        amount: 2_000_000n, datumHash: null }],
+      validUntil: BigInt((await chain.getTip()).time + 300_000) };
+    const fresh = deriveNoteSecrets(keys.users[2]!, 1);
+    const spend = spendWitness({ note, stateTree: tree, stateIndex, aspTree, aspIndex: 0,
+      withdrawn: 3_000_000n, newNullifier: fresh.nullifier, newSecret: fresh.secret, context: contextFor(intent) });
+    const proof = await prove(await loadDevArtifacts('spend', repoRoot), spend.input);
+    const chaining = new Sequencer({ ctx, status: chain, maxPending: 2 });
+    const chained = new Crank({ ctx, indexer, seed: keys.crank, artifacts, sequencer: chaining });
+    const trie = await nullifierInsertion([nullifierHash(firstNote.nullifier)], spend.public.nullifierHash);
+    const settle = await chaining.run(async () => {
+      const pool = await readPool(chaining.ctx);
+      const tx = await buildSettle(chaining.ctx, { payer: payer(keys.relayer), pool, proof: proof.cardano,
+        ...spend.public, withdrawn: 3_000_000n, intent, nullifierProof: trie.proofCbor, newNullifierRoot: trie.newRoot });
+      return chaining.submit(signTx(tx.cbor, [keys.relayer]), { kind: 'settle', nullifier: spend.public.nullifierHash });
     });
-  }
+    assert.equal(settle.status, 'accepted');
+    const chainedResult = await chained.tick();
+    assert.ok(chainedResult);
+    // The Insert spends the pending Settle's pool output, not the confirmed one.
+    const settleView = decodeTx(chain.transaction(settle.txId)!.cbor);
+    const poolIndex = settleView.outputs.findIndex(output => output.address === ctx.deployment.scripts.pool.address);
+    assert.ok(poolIndex >= 0);
+    const insertView = decodeTx(chain.transaction(chainedResult.txId)!.cbor);
+    assert.ok(insertView.inputs.some(ref => ref.txId === settle.txId && ref.index === poolIndex));
+    // One block confirms the parent and the child.
+    chain.mineBlock();
+    await chaining.reconcile();
+    const confirmed = await readPool(ctx);
+    assert.ok(!confirmed.datum.queue.includes(spend.public.newCommitment));
+    assert.deepEqual(confirmed.datum.queue, []);
+  });
 });

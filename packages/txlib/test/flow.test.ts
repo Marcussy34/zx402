@@ -411,3 +411,34 @@ test('TX-02 to TX-09: real proof pool story and rejected attacks', {
     console.table(rows);
   });
 });
+
+test('TX-15 Insert and ASP updates carry a deadline', {
+  timeout: 900_000,
+  skip: devKeysPresent(repoRoot) ? false : 'Development proving keys are absent; the deadline test needs circuits/build/dev/manifest.json',
+}, async () => {
+  const { chain, ctx, keys, run } = await startDevnet();
+  const network = ctx.deployment.network;
+  // Aiken's slot conversion starts at the network's configured Shelley-era origin.
+  chain.advanceSlots(NETWORKS[network].zeroSlot);
+  const user = keys.users[0]!;
+  const payer = (key: Uint8Array) => ({ address: enterpriseAddress(key, network) });
+  const secrets = deriveNoteSecrets(user, 0);
+  await run(await buildDeposit(ctx, { payer: payer(user), amount: 10_000_000n,
+    precommitment: precommitment(secrets.nullifier, secrets.secret), refundKeyHash: hex(keyHash(user)) }), [user]);
+  const pool = await readPool(ctx);
+  const config = await readConfig(ctx);
+  const plan = planInsert({ poolId: ctx.deployment.poolId, pool, config: config.datum, deposits: await readDeposits(ctx) });
+  assert.ok(plan);
+  const witness = insertWitness({ tree: MerkleTree.empty(), slots: plan.slots });
+  const proof = (await prove(await loadDevArtifacts('insert', repoRoot), witness.input)).cardano;
+  const args = { payer: payer(keys.crank), pool, plan, proof, newRoot: witness.newRoot };
+  const tip = await chain.getTip();
+  const tx = await buildInsert(ctx, { ...args, validForMs: 120_000 });
+  assert.equal(decodeTx(tx.cbor).invalidHereafter, timeToSlot(tip.time + 120_000, network));
+  // No option means the ten-minute default.
+  const fallback = await buildInsert(ctx, args);
+  assert.equal(decodeTx(fallback.cbor).invalidHereafter, timeToSlot(tip.time + 600_000, network));
+  for (const validForMs of [0, -1, 1.5]) {
+    await assert.rejects(buildInsert(ctx, { ...args, validForMs }), /positive safe integer/);
+  }
+});

@@ -1,9 +1,9 @@
-import { INSERT_BATCH, R, labelFor, type CardanoProof, type InsertSlot } from '@zx402/crypto';
+import { INSERT_BATCH, NETWORKS, R, labelFor, type CardanoProof, type InsertSlot } from '@zx402/crypto';
 import { addAssetAmount, assetAmount, isAdaAsset, type AssetClass } from './asset.js';
 import { decodeDepositDatum, encodeDepositRedeemer, encodePoolDatum, encodePoolRedeemer, type ConfigDatum } from './codec.js';
 import { complete, newTxBuilder, readConfig, type ChainContext, type DepositUtxo, type Payer, type PoolState } from './context.js';
 import { utxoToMesh } from './providers/blockfrost.js';
-import type { BuiltTx } from './types.js';
+import { timeToSlot, type BuiltTx } from './types.js';
 
 export interface InsertPlan {
   flush: number;
@@ -63,10 +63,18 @@ export function planInsert(a: {
   return plan.slots.length === 0 ? null : plan;
 }
 
-export async function buildInsert(ctx: ChainContext, a: { payer: Payer; pool: PoolState; plan: InsertPlan; proof: CardanoProof; newRoot: bigint }): Promise<BuiltTx> {
+export async function buildInsert(ctx: ChainContext, a: {
+  payer: Payer; pool: PoolState; plan: InsertPlan; proof: CardanoProof; newRoot: bigint; validForMs?: number;
+}): Promise<BuiltTx> {
   const { network, scripts, refScripts, asset } = ctx.deployment;
+  // An Insert must not stay valid forever; ten minutes is enough for one to land.
+  const validForMs = a.validForMs ?? 600_000;
+  if (!Number.isSafeInteger(validForMs) || validForMs <= 0) throw new RangeError('validForMs must be a positive safe integer');
   const config = await readConfig(ctx);
   const builder = await newTxBuilder({ provider: ctx.provider, network });
+  const tip = await ctx.provider.getTip();
+  // A devnet tip can precede the network origin, where slot numbers stop being meaningful.
+  builder.invalidHereafter(timeToSlot(Math.max(tip.time, NETWORKS[network].zeroTime) + validForMs, network));
   const { utxo, datum } = a.pool;
   const { plan } = a;
   // Token deposits pay the crank from their ADA, without reducing token credit.
