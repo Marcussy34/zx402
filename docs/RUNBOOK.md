@@ -83,12 +83,16 @@ It logs one line for each round that did something, for example an Insert or an 
 A line such as `indexer: Chain tip changed during sync` is normal. The next round succeeds.
 Stop the node with Ctrl+C.
 
-The node reads four optional settings from the environment:
+The node reads five optional settings from the environment:
 
 - `ZX402_INTERVAL_MS` is the pause between two rounds in milliseconds. The default is 10000.
 - `ZX402_IDLE_RETRY_MS` is the time before the crank or the association service repeats a step that submitted nothing, while its input data is unchanged. The default is 20000.
 - `ZX402_INDEXER_PORT` is the port of the indexer. The default is 4010.
 - `ZX402_RELAYER_PORT` is the port of the relayer. The default is 4011.
+- `ZX402_MAX_PENDING` is how many pool transactions the node may chain, from 1 to 8. The default is 1.
+
+A value above 1 lets a new pool transaction build on one that is still pending, so several payments can land in one block.
+CAUTION: run the admin command only when the node has nothing pending. Otherwise pending Settles drop, and the node rebuilds them.
 
 ## 5. Run a seller
 

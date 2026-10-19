@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { FacilitatorCardanoSigner } from '@x402/cardano';
 import { IndexerClient, RelayerClient } from '@zx402/api';
-import { fileStore } from '@zx402/core';
+import { createZx402, fileStore } from '@zx402/core';
 import { addressFromBech32, deriveNoteSecrets, precommitment, vkToCardano } from '@zx402/crypto';
 import { devKeysPresent, loadDevArtifacts, loadDevVkey, shutdown } from '@zx402/prover';
 import {
@@ -122,27 +122,73 @@ test('E2E-04, CRK-01, ASP-01: idle steps wait for changed snapshots or their ret
   assert.equal(expectation.mock.callCount(), 1, 'An association submission must request a second look');
   expectation.mock.resetCalls();
 
-  assert.equal(await round(), 2, 'The association service checks its pending update once');
-  for (let i = 0; i < 3; i += 1) assert.equal(await round(), 1);
+  // A pending pool transaction makes the sequencer read the tip once more per round.
+  assert.equal(await round(), 3, 'The association service checks its pending update once');
+  for (let i = 0; i < 3; i += 1) assert.equal(await round(), 2);
   assert.equal(expectation.mock.callCount(), 0, 'Idle steps must not extend indexer activity');
   now += idleRetryMs;
-  assert.equal(await round(), 5, 'Both idle steps must retry when their deadlines expire');
-  assert.equal(await round(), 1);
+  assert.equal(await round(), 6, 'Both idle steps must retry when their deadlines expire');
+  assert.equal(await round(), 2);
   now += idleRetryMs;
   const aspFailure = t.mock.method(chain, 'getUtxosAt', async (address: string) => {
     if (address === ctx.deployment.scripts.asp.address) throw new Error('association retry read failed');
     return read(address);
   });
   try { await node.tick(); } finally { aspFailure.mock.restore(); }
-  assert.equal(await round(), 2, 'A thrown association step must run again in the next round');
-  assert.equal(await round(), 1);
+  assert.equal(await round(), 3, 'A thrown association step must run again in the next round');
+  assert.equal(await round(), 2);
   node.asp.remove(deposits.find(d => d.txId === depositTx)!.label!);
-  assert.equal(await round(), 2, 'Changing approved leaves must bypass the association retry delay');
-  assert.equal(await round(), 1);
+  assert.equal(await round(), 3, 'Changing approved leaves must bypass the association retry delay');
+  assert.equal(await round(), 2);
   const approvals = approval.mock.callCount();
   chain.mineBlock();
   await node.tick();
   assert.equal(approval.mock.callCount(), approvals + 1, 'A changed confirmed ASP root must bypass the retry delay');
+});
+
+test('E2E-18 the node chains two private payments in one block', {
+  timeout: 900_000,
+  skip: devKeysPresent(root) ? false : 'Development proving keys are absent: circuits/build/dev/manifest.json is required',
+}, async t => {
+  const { startNode } = await import('../src/node.js');
+  const { chain, ctx, keys } = await startDevnet();
+  chain.advanceSlots(timeToSlot(Date.now(), ctx.deployment.network));
+  // Keep the chain at wall time, because the relayer quotes real deadlines.
+  const mine = async () => chain.mineBlock(Math.max(0, timeToSlot(Date.now(), ctx.deployment.network) - (await chain.getTip()).slot));
+  const node = await startNode({ ctx, history: chain, seeds: keys, maxPending: 2, intervalMs: 0, ports: { indexer: 0, relayer: 0 },
+    insertArtifacts: await loadDevArtifacts('insert', root), spendVkey: await loadDevVkey('spend', root) });
+  t.after(() => node.close());
+  const indexer = new IndexerClient(node.urls.indexer);
+  const relayer = new RelayerClient(node.urls.relayer);
+  const artifacts = { spend: await loadDevArtifacts('spend', root), ragequit: await loadDevArtifacts('ragequit', root) };
+  const poll = { intervalMs: 0, timeoutMs: 900_000, onPoll: async () => { await mine(); await node.tick(); } };
+  const walletA = keys.users[0]!;
+  const walletB = keys.users[1]!;
+  const sdkA = createZx402({ seed: walletA, ctx, indexer, relayer, artifacts, poll });
+  const sdkB = createZx402({ seed: walletB, ctx, indexer, relayer, artifacts, poll });
+  const deposits = await Promise.all([
+    sdkA.deposit({ amount: 10_000_000n, walletSeed: walletA }),
+    sdkB.deposit({ amount: 10_000_000n, walletSeed: walletB }),
+  ]);
+  await mine();
+  await Promise.all([sdkA.waitForNote(deposits[0]!.prepared.noteId), sdkB.waitForNote(deposits[1]!.prepared.noteId)]);
+  const payouts = [{ address: enterpriseAddress(keys.users[2]!, ctx.deployment.network), amount: price }];
+  const settling = Promise.all([sdkA.settlePrivately({ payouts }), sdkB.settlePrivately({ payouts })]);
+  // Both Settles must reach the mempool before any block is mined.
+  const deadline = Date.now() + 120_000;
+  while (chain.mempoolTxIds().length < 2 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+  const chained = chain.mempoolTxIds().length === 2;
+  // Release a Settle that waits for a block, so the node can close. The checks below then fail.
+  if (!chained) {
+    chain.mineBlock();
+    await node.tick();
+  }
+  const [first, second] = await settling;
+  chain.mineBlock();
+  assert.ok(chained, 'Both settles must reach the mempool before a block is mined');
+  const block = chain.blocks().at(-1)!;
+  assert.ok(block.txIds.includes(first.txHash), 'The first Settle must land in the block');
+  assert.ok(block.txIds.includes(second.txHash), 'The second Settle must land in the same block');
 });
 
 // Only the chain adapter differs from the stock seller and facilitator.

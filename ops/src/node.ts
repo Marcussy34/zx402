@@ -13,25 +13,31 @@ import {
   type CircuitArtifacts, type CircuitManifest, type CircuitName,
 } from '@zx402/prover';
 import { Relayer } from '@zx402/relayer';
-import { blockfrostProvider, vkToHex, type ChainContext, type ChainHistory, type Deployment } from '@zx402/txlib';
+import {
+  blockfrostProvider, Sequencer, vkToHex,
+  type ChainContext, type ChainHistory, type Deployment, type TxStatusReader,
+} from '@zx402/txlib';
 import { readSettings } from './env.js';
 import { roleSeed } from './roles.js';
 
 export interface NodeOptions {
   ctx: ChainContext;
-  history: ChainHistory;
+  /** The provider or FakeChain must answer transaction status for the sequencer. */
+  history: ChainHistory & TxStatusReader;
   seeds: { crank: Uint8Array; relayer: Uint8Array; asp: Uint8Array };
   insertArtifacts: CircuitArtifacts;
   spendVkey: SnarkjsVk;
   ports?: { indexer?: number; relayer?: number };
   intervalMs?: number;
   idleRetryMs?: number;
+  /** Pool transactions the node may chain. Defaults to 1. */
+  maxPending?: number;
   now?: () => number;
   aspStorePath?: string;
   log?: (line: string) => void;
 }
 export interface Zx402Node {
-  indexer: Indexer; crank: Crank; asp: AspService; relayer: Relayer;
+  indexer: Indexer; crank: Crank; asp: AspService; relayer: Relayer; sequencer: Sequencer;
   urls: { indexer: string; relayer: string };
   /** Sync, run pending work, and sync after changes. Concurrent callers share one round. */
   tick(): Promise<void>;
@@ -58,11 +64,14 @@ export async function startNode(o: NodeOptions): Promise<Zx402Node> {
   }
   const log = redactedLog(o.log ?? (() => {}), Object.values(o.seeds).map(seed => Buffer.from(seed).toString('hex')));
   if (o.aspStorePath) await mkdir(dirname(o.aspStorePath), { recursive: true });
+  // One sequencer owns the pool output for every service in this process.
+  const sequencer = new Sequencer({ ctx: o.ctx, status: o.history, maxPending: o.maxPending ?? 1,
+    log: line => log(`sequencer: ${line}`) });
   let asp: AspService;
   const indexer = new Indexer({ ctx: o.ctx, history: o.history, aspLeaves: root => asp.leaves(root) });
-  asp = new AspService({ ctx: o.ctx, indexer, payerSeed: o.seeds.asp, operatorSeeds: [o.seeds.asp], storePath: o.aspStorePath });
-  const crank = new Crank({ ctx: o.ctx, indexer, seed: o.seeds.crank, artifacts: o.insertArtifacts });
-  const relayer = new Relayer({ ctx: o.ctx, indexer, seed: o.seeds.relayer, vkey: o.spendVkey,
+  asp = new AspService({ ctx: o.ctx, sequencer, indexer, payerSeed: o.seeds.asp, operatorSeeds: [o.seeds.asp], storePath: o.aspStorePath });
+  const crank = new Crank({ ctx: o.ctx, sequencer, indexer, seed: o.seeds.crank, artifacts: o.insertArtifacts });
+  const relayer = new Relayer({ ctx: o.ctx, sequencer, indexer, seed: o.seeds.relayer, vkey: o.spendVkey,
     log: (line, error) => log(`relayer: ${line}${error === undefined ? '' : `: ${message(error)}`}`) });
   const indexerServer = await serveIndexer(indexer, { port: o.ports?.indexer ?? 4010, syncMs: 0,
     onError: error => log(`indexer: ${message(error)}`) });
@@ -113,6 +122,11 @@ export async function startNode(o: NodeOptions): Promise<Zx402Node> {
       }
       await sync();
       if (indexer.syncedAt === undefined) return;
+      // A reset empties the pending list, so the next build starts from the new confirmed head.
+      try {
+        const reset = await sequencer.reconcile();
+        if (reset !== null) events.push(`sequencer: reset (${reset.reason}, ${reset.dropped.length} dropped)`);
+      } catch (error) { log(`sequencer: ${message(error)}`); }
       try {
         const pool = await indexer.getPool();
         const pending = (await indexer.getDeposits()).filter(d => d.status === 'pending');
@@ -156,7 +170,7 @@ export async function startNode(o: NodeOptions): Promise<Zx402Node> {
   // The initial round warms the HTTP snapshot, including a slow cold replay.
   await tick();
   if (intervalMs > 0) schedule();
-  return { indexer, crank, asp, relayer, urls: { indexer: indexerServer.url, relayer: relayerServer.url }, tick,
+  return { indexer, crank, asp, relayer, sequencer, urls: { indexer: indexerServer.url, relayer: relayerServer.url }, tick,
     close() {
       closing ??= (async () => {
         closed = true;
@@ -205,8 +219,18 @@ async function main(): Promise<void> {
     }
     return Number(value);
   };
+  const bounded = (name: string, fallback: number, min: number, max: number): number => {
+    const value = process.env[name];
+    if (value === undefined) return fallback;
+    if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) {
+      throw new Error(`${name} must be an integer from ${min} to ${max}`);
+    }
+    return Number(value);
+  };
   const intervalMs = integer('ZX402_INTERVAL_MS', 10_000);
   const idleRetryMs = integer('ZX402_IDLE_RETRY_MS', 20_000);
+  // Chaining stays off until the Preprod measurement sets a higher default.
+  const maxPending = bounded('ZX402_MAX_PENDING', 1, 1, 8);
   const ports = { indexer: integer('ZX402_INDEXER_PORT', 4010), relayer: integer('ZX402_RELAYER_PORT', 4011) };
   const settings = readSettings();
   const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -219,7 +243,7 @@ async function main(): Promise<void> {
   const log = redactedLog(console.log, [settings.blockfrostProjectId, Buffer.from(settings.operatorSeed).toString('hex'),
     ...Object.values(seeds).map(seed => Buffer.from(seed).toString('hex'))]);
   if (settings.network === 'mainnet') log('CAUTION: the node spends real ADA. Submitted transactions cannot be undone.');
-  const node = await startNode({ ctx: { provider, deployment }, history: provider, seeds, intervalMs, idleRetryMs, ports,
+  const node = await startNode({ ctx: { provider, deployment }, history: provider, seeds, intervalMs, idleRetryMs, maxPending, ports,
     insertArtifacts: await keys.load('insert'), spendVkey: keys.spendVkey,
     // One approval store per pool, so a new pool never reads the labels of an old one.
     aspStorePath: join(root, `deployments/${settings.network}/asp-store-${deployment.poolId.slice(0, 8)}.json`), log });
