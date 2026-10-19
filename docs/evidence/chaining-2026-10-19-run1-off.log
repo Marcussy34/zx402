@@ -1,0 +1,26 @@
+Relayer top-up b4056e9eec6e8eba04954d09a5a8cf64902ce8a2a3c5c34aac555247149d1099 of 5000000 lovelace submitted in 2.449 seconds
+Relayer top-up b4056e9eec6e8eba04954d09a5a8cf64902ce8a2a3c5c34aac555247149d1099 confirmed in 23.373 seconds
+Wallet 0 reuses note d0
+Wallet 1 reuses note d0
+Wallet 2 reuses note d0
+Wallet 3 reuses note c0
+Wallet 4 reuses note d0
+All 5 wallets are spendable
+Wallet 0 settle bf66605c-55d8-45c6-bc8f-5dbb63451279 submitted as acc627f94a7b09d417bc997acca2a1848be493e96f127c4e63c4b664d296f423 in 314.204 seconds
+Wallet 1 settle f6c18fe9-04c4-4b30-948b-6c251bbb02c7 submitted as 7a57772ffdfb853a004e2a24822f357bd4f3c8042a6044e7c380c7bea9779b1a in 314.204 seconds
+Wallet 2 settle 792680b4-3bcc-432b-af79-b400b5f2462f submitted as e7f76dfa2b3b639b2d83583bcb627e3a84c420964aff7dc87402e16dd552c2af in 314.205 seconds
+Wallet 3 settle 05cdcbbd-5158-4c02-9330-61ceb855ba07 submitted as 05b318c8a324233f7723879c04db8adb3df08d14b3db9c0c56e7b2ff2825dd41 in 314.205 seconds
+Wallet 4 settle 4e6c05e7-8d5b-40c2-adc5-4810470f8261 submitted as eb48395369216f09bae3e0767146bed95286306b48a8a42d8d991295cbf8fcdd in 314.205 seconds
+Settle f6c18fe9-04c4-4b30-948b-6c251bbb02c7 confirmed in 314.830 seconds
+Settle 792680b4-3bcc-432b-af79-b400b5f2462f confirmed in 315.190 seconds
+Settle 05cdcbbd-5158-4c02-9330-61ceb855ba07 confirmed in 315.535 seconds
+Settle 4e6c05e7-8d5b-40c2-adc5-4810470f8261 confirmed in 315.854 seconds
+Settle bf66605c-55d8-45c6-bc8f-5dbb63451279 confirmed in 343.274 seconds
+index  settle                                                              status       block  seconds
+0      acc627f94a7b09d417bc997acca2a1848be493e96f127c4e63c4b664d296f423    confirmed    5310226  343.274
+1      7a57772ffdfb853a004e2a24822f357bd4f3c8042a6044e7c380c7bea9779b1a    confirmed    5310212  314.830
+2      e7f76dfa2b3b639b2d83583bcb627e3a84c420964aff7dc87402e16dd552c2af    confirmed    5310209  315.190
+3      05b318c8a324233f7723879c04db8adb3df08d14b3db9c0c56e7b2ff2825dd41    confirmed    5310224  315.535
+4      eb48395369216f09bae3e0767146bed95286306b48a8a42d8d991295cbf8fcdd    confirmed    5310213  315.854
+Burst of 5: 5 confirmed in 5 distinct blocks, last confirmation after 343.274 seconds
+exit 0

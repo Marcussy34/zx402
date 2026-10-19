@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, mock, test } from 'node:test';
 import { BlockfrostProvider, type BlockInfo, type UTxO } from '@meshsdk/core';
 import {
-  blockfrostProvider, providerFromMesh, utxoFromMesh, utxoToMesh, type MeshProviderLike,
+  blockfrostProvider, ogmiosAdditionalUtxo, providerFromMesh, utxoFromMesh, utxoToMesh, type MeshProviderLike,
 } from '../src/providers/blockfrost.js';
 import { ScriptFailure, SubmitRejected, type Utxo } from '../src/types.js';
 
@@ -27,6 +27,13 @@ const withDatum: UTxO = {
 };
 const withScript: UTxO = {
   ...plain, output: { ...plain.output, scriptRef: '820343010203', scriptHash },
+};
+const policy = '16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde';
+const assetName = '0014df10745553444d';
+const chained: Utxo = {
+  ref: { txId, index: 4 }, address,
+  value: { lovelace: 6_000_000n, assets: { [policy + assetName]: 10n } },
+  inlineDatum: 'd8799f0102ff', datumHash: null, scriptRef: null,
 };
 const block: BlockInfo = {
   time: 1720000000, hash: 'aa'.repeat(32), slot: '99999999', epoch: 400, epochSlot: '123',
@@ -69,7 +76,7 @@ test('TX-10 provider: missing or malformed raw cost models fail before transacti
 function fake(overrides: Partial<MeshProviderLike> = {}): MeshProviderLike {
   const unexpected = async (): Promise<never> => { throw new Error('Unexpected Mesh method'); };
   return {
-    get: unexpected, fetchUTxOs: unexpected, fetchLatestBlock: unexpected,
+    get: unexpected, post: unexpected, fetchUTxOs: unexpected, fetchLatestBlock: unexpected,
     evaluateTx: unexpected, submitTx: unexpected, ...overrides,
   };
 }
@@ -77,7 +84,7 @@ function fake(overrides: Partial<MeshProviderLike> = {}): MeshProviderLike {
 // A missed fake must fail locally rather than reach an external service.
 before(() => {
   mock.method(globalThis, 'fetch', async () => { throw new Error('Network disabled in Blockfrost tests'); });
-  for (const method of ['get', 'fetchUTxOs', 'fetchLatestBlock', 'evaluateTx', 'submitTx'] as const) {
+  for (const method of ['get', 'post', 'fetchUTxOs', 'fetchLatestBlock', 'evaluateTx', 'submitTx'] as const) {
     mock.method(BlockfrostProvider.prototype, method, async () => { throw new Error('Missing Mesh fake'); });
   }
 });
@@ -185,17 +192,80 @@ test('TX-05 provider: latest block gives its slot, hash, and POSIX milliseconds'
   assert.deepEqual(await provider.getTip(), { slot: 99999999, time: 1720000000000, blockHash: 'aa'.repeat(32) });
 });
 
-test('REL-06 provider: evaluation passes converted additional UTXOs and returns every redeemer tag', async () => {
+test('REL-06 provider: evaluation without additional UTXOs returns every redeemer tag', async () => {
   const tags = ['SPEND', 'MINT', 'CERT', 'REWARD', 'VOTE', 'PROPOSE'] as const;
   const calls: unknown[][] = [];
   const provider = providerFromMesh(fake({ evaluateTx: async (...args) => {
     calls.push(args);
     return tags.map((tag, index) => ({ tag, index, budget: { mem: 123, steps: 456 } }));
   } }));
-  assert.deepEqual(await provider.evaluate('cafe', [plainUtxo]),
+  assert.deepEqual(await provider.evaluate('cafe'),
     ['spend', 'mint', 'cert', 'reward', 'vote', 'propose'].map((tag, index) => ({ tag, index, mem: 123n, steps: 456n })));
   await provider.evaluate('beef');
-  assert.deepEqual(calls, [['cafe', [plain]], ['beef', []]]);
+  assert.deepEqual(calls, [['cafe', []], ['beef', []]]);
+});
+
+// Blockfrost's Ogmios refuses the dotted assets keys of the Ogmios v5.6 schema and reads tokens nested by policy.
+test('TX-16 evaluate sends additional UTXOs in the shape Blockfrost decodes', async () => {
+  let body: { cbor?: string; additionalUtxoSet?: unknown[] } | undefined;
+  const provider = providerFromMesh(fake({ post: async (path, sent) => {
+    assert.equal(path, 'utils/txs/evaluate/utxos');
+    body = sent;
+    return { result: { EvaluationResult: { 'spend:0': { memory: 123, steps: 456 } } } };
+  } }));
+  assert.deepEqual(await provider.evaluate('cafe', [chained]), [{ tag: 'spend', index: 0, mem: 123n, steps: 456n }]);
+  assert.equal(body?.cbor, 'cafe');
+  assert.deepEqual(body?.additionalUtxoSet?.[0], [
+    { txId, index: 4 },
+    {
+      address,
+      value: { coins: 6_000_000, [policy]: { [assetName]: 10 } },
+      datum: 'd8799f0102ff',
+    },
+  ]);
+});
+
+test('TX-16 an empty asset name nests under an empty key', () => {
+  const [, output] = ogmiosAdditionalUtxo({
+    ...chained, value: { lovelace: 2_000_000n, assets: { [policy]: 1n } }, inlineDatum: null,
+  });
+  assert.deepEqual(output.value, { coins: 2_000_000, [policy]: { '': 1 } });
+});
+
+test('TX-16 a reference script in an additional UTXO throws instead of being dropped', () => {
+  assert.throws(
+    () => ogmiosAdditionalUtxo({ ...chained, scriptRef: { hash: scriptHash, cbor: '820343010203', size: 3 } }),
+    /reference script/i,
+  );
+});
+
+test('TX-16 a quantity that is not a safe integer throws', () => {
+  const unsafe = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+  assert.throws(() => ogmiosAdditionalUtxo({ ...chained, value: { lovelace: unsafe, assets: {} } }), /safe integer/);
+  assert.throws(() => ogmiosAdditionalUtxo({ ...chained, value: { lovelace: 1n, assets: { [policy]: unsafe } } }), /safe integer/);
+});
+
+test('TX-16 without additional UTXOs evaluate still uses evaluateTx', async () => {
+  const calls: unknown[][] = [];
+  const provider = providerFromMesh(fake({
+    evaluateTx: async (...args) => { calls.push(['evaluateTx', ...args]); return []; },
+    post: async () => { calls.push(['post']); return {}; },
+  }));
+  assert.deepEqual(await provider.evaluate('cafe'), []);
+  assert.deepEqual(calls, [['evaluateTx', 'cafe', []]]);
+});
+
+test('TX-16 an EvaluationFailure answer is a ScriptFailure', async () => {
+  const failure = { result: { EvaluationFailure: { ScriptFailures: {
+    'spend:0': [{ validatorFailed: { error: 'Validation failed', traces: ['bad datum'] } }],
+  } } } };
+  const provider = providerFromMesh(fake({ post: async () => failure }));
+  await assert.rejects(provider.evaluate('cafe', [chained]), error => {
+    assert.ok(error instanceof ScriptFailure);
+    assert.match(error.message, /Validation failed/);
+    assert.deepEqual(error.traces, ['bad datum']);
+    return true;
+  });
 });
 
 test('REL-02 provider: submission returns the provider transaction ID', async () => {

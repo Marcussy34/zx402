@@ -11,6 +11,7 @@
     "deploy": "node --env-file=../.env --import tsx src/deploy.ts",
     "node": "node --env-file=../.env --import tsx src/node.ts",
     "demo": "node --env-file=../.env --import tsx src/demo.ts",
+    "burst": "node --env-file=../.env --import tsx src/burst.ts",
     "masumi": "node --env-file=../.env --import tsx src/masumi.ts",
     "admin": "node --env-file=../.env --import tsx src/admin.ts"
   },

@@ -1,0 +1,50 @@
+round: indexed 31
+Indexer http://127.0.0.1:4010; relayer http://127.0.0.1:4011
+round: insert c779f212a28fad42ef0e2513e99ac89cf65f8ab24e156c0b77281db5657f3408 (1 deposits, 0 notes)
+round: indexed 1; asp e3440223a30e675adb57223b416e7ff643963d34a7d93e0cb67e6e30b41f4aac (1 approvals)
+indexer: Chain tip changed during sync; retry on the next poll
+round: insert 04dd246baa13ef113d60bc91d18d80a7132fdfac6857cab3e37ef4deb37d4b51 (1 deposits, 0 notes)
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1; asp 35f0e4e04849ae6a89d74ab4b18a259d5e4c5e0289141bf8a6f0f84028334868 (1 approvals)
+round: insert ee5d206cbe705c512d5289e6155fb23f7ae78578a6d869bf77bfe651b76f1c8c (1 deposits, 0 notes)
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1; asp 2f8456193525f1b58132baeca454cac0b145907c2d149f034f5ac27183003aa0 (1 approvals)
+indexer: Chain tip changed during sync; retry on the next poll
+round: insert 82d65818977379e8a9248d917cfb422cc56fe7087397c70e3ac23d8d7339ba24 (1 deposits, 0 notes)
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1; asp c8e85a891a8133e153f58ce1fbce0b9cc7ce70732a5e60c2fe316288b7319f1a (1 approvals)
+indexer: Chain tip changed during sync; retry on the next poll
+round: insert 9dfb290d1e4448441dce9ecbb1b202710b4e7b027a3a1f125ea0ddfd20f7e057 (1 deposits, 0 notes)
+round: indexed 1; asp 950d0997acedb9a6406115a9cf8d86e3ee4c877cbd49267349efee5b1fb4ed1c (1 approvals)
+round: indexed 1; insert 4e65b7286fbbf292ec05717154f936cbd1e43c9622af4b296590e3248ab50b35 (0 deposits, 1 notes)
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+round: indexed 1
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+relayer: The node refused the settle transaction: {"data":{"error":"Bad Request","message":"{\"contents\":{\"contents\":{\"contents\":{\"era\":\"ShelleyBasedEraConway\",\"error\":[\"ConwayUtxowFailure (UtxoFailure (BadInputsUTxO (NonEmptySet (fromList [TxIn (TxId {unTxId = SafeHash \\\"d3242c3f580703132d5d3b958f6f5eaf7369951086855a77bba83d4cf708ef34\\\"}) (TxIx {unTxIx = 2})]))))\",\"ConwayUtxowFailure (UtxoFailure (ValueNotConservedUTxO Mismatch (RelEQ) {supplied: MaryValue (Coin 6000000) (MultiAsset (fromList [(PolicyID {policyID = ScriptHash \\\"16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde\\\"},fromList [(\\\"0014df10745553444d\\\",47970000)]),(PolicyID {policyID = ScriptHash \\\"60279ebfb8db22bbe0cb2a1b7a61702ab36ade074a3866ac836df3ed\\\"},fromList [(\\\"706f6f6c\\\",1)])])), expected: MaryValue (Coin 23275990) (MultiAsset (fromList [(PolicyID {policyID = ScriptHash \\\"16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde\\\"},fromList [(\\\"0014df10745553444d\\\",48970000)]),(PolicyID {policyID = ScriptHash \\\"60279ebfb8db22bbe0cb2a1b7a61702ab36ade074a3866ac836df3ed\\\"},fromList [(\\\"706f6f6c\\\",1)])]))}))\",\"ConwayUtxowFailure (UtxoFailure (UtxosFailure (CollectErrors (BadTranslation (BabbageContextError (AlonzoContextError (TranslationLogicMissingInput (TxIn (TxId {unTxId = SafeHash \\\"d3242c3f580703132d5d3b958f6f5eaf7369951086855a77bba83d4cf708ef34\\\"}) (TxIx {unTxIx = 2}))))) :| []))))\"],\"kind\":\"ShelleyTxValidationError\"},\"tag\":\"TxValidationErrorInCardanoMode\"},\"tag\":\"TxCmdTxSubmitValidationError\"},\"tag\":\"TxSubmitFail\"}","status_code":400},"headers":{"date":"Mon, 19 Oct 2026 11:11:27 GMT","content-type":"application/json; charset=utf-8","content-length":"1556","connection":"keep-alive","server":"cloudflare","vary":"Origin","access-control-allow-origin":"*","bf-submit-server":"e1f4ccc29ee5a9bb1f2d55e35e58119727c3f3f0e0da9c0cf0a9582299058083","cf-cache-status":"DYNAMIC","set-cookie":"__cflb=0H28ur4xJGQN715a2kvaPqCaJmk3K2tRMYCGHovwTLR; HttpOnly; SameSite=Lax; Path=/; Expires=Mon, 19 Oct 2026 11:41:27 GMT","report-to":"{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=WTSz6x6FESKGM7xRddyVKKmN2Zv73%2FIaMAdksR4si7%2FL%2FRFhcORELFmlnS6rUPjQxXI6WVA88u38rSFULiMkm1f4VXwA0NfNULCWwVHPhosfubDwQwd%2B8BRsgvdzQ3MWH88%2BHe7AvaCUliDAKnTZ\"}]}","nel":"{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}","cf-ray":"a4cf5792dc6ab2f4-SIN"},"status":400}
+round: indexed 1; insert ffc83c4dbfcf6c98351c1c7391d6dc5af3d9545e8c92fdfd0fbd11a317dab38f (0 deposits, 1 notes)
+indexer: Pool history has not reached the current pool UTXO
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{"spend:0":{"extraRedeemers":["spend:0"]}}}},"reflection":{"id":"58f5981d-cb3b-4ba6-bba5-ee94eb793a60"}}
+round: indexed 1
+round: indexed 1
+relayer: The node refused the settle transaction: {"data":{"error":"Bad Request","message":"{\"contents\":{\"contents\":{\"contents\":{\"era\":\"ShelleyBasedEraConway\",\"error\":[\"ConwayUtxowFailure (UtxoFailure (BadInputsUTxO (NonEmptySet (fromList [TxIn (TxId {unTxId = SafeHash \\\"7a57772ffdfb853a004e2a24822f357bd4f3c8042a6044e7c380c7bea9779b1a\\\"}) (TxIx {unTxIx = 2})]))))\",\"ConwayUtxowFailure (UtxoFailure (ValueNotConservedUTxO Mismatch (RelEQ) {supplied: MaryValue (Coin 6000000) (MultiAsset (fromList [(PolicyID {policyID = ScriptHash \\\"16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde\\\"},fromList [(\\\"0014df10745553444d\\\",43970000)]),(PolicyID {policyID = ScriptHash \\\"60279ebfb8db22bbe0cb2a1b7a61702ab36ade074a3866ac836df3ed\\\"},fromList [(\\\"706f6f6c\\\",1)])])), expected: MaryValue (Coin 17777375) (MultiAsset (fromList [(PolicyID {policyID = ScriptHash \\\"16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde\\\"},fromList [(\\\"0014df10745553444d\\\",46970000)]),(PolicyID {policyID = ScriptHash \\\"60279ebfb8db22bbe0cb2a1b7a61702ab36ade074a3866ac836df3ed\\\"},fromList [(\\\"706f6f6c\\\",1)])]))}))\",\"ConwayUtxowFailure (UtxoFailure (UtxosFailure (CollectErrors (BadTranslation (BabbageContextError (AlonzoContextError (TranslationLogicMissingInput (TxIn (TxId {unTxId = SafeHash \\\"7a57772ffdfb853a004e2a24822f357bd4f3c8042a6044e7c380c7bea9779b1a\\\"}) (TxIx {unTxIx = 2}))))) :| []))))\"],\"kind\":\"ShelleyTxValidationError\"},\"tag\":\"TxValidationErrorInCardanoMode\"},\"tag\":\"TxCmdTxSubmitValidationError\"},\"tag\":\"TxSubmitFail\"}","status_code":400},"headers":{"date":"Mon, 19 Oct 2026 11:14:05 GMT","content-type":"application/json; charset=utf-8","content-length":"1556","connection":"keep-alive","server":"cloudflare","vary":"Origin","access-control-allow-origin":"*","bf-submit-server":"e1f4ccc29ee5a9bb1f2d55e35e58119727c3f3f0e0da9c0cf0a9582299058083","cf-cache-status":"DYNAMIC","set-cookie":"__cflb=0H28ur4xJGQN715a2kvaPqCaJmk3K2tR59YjtSeFhRX; HttpOnly; SameSite=Lax; Path=/; Expires=Mon, 19 Oct 2026 11:44:05 GMT","report-to":"{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=HE2vlSjsomZh4N%2FZHmWqxCUd%2FPTTsN%2F3bgewB6wlA%2BPw%2BxBeDMHjxgMPs17shUa5NRHhw5MzLUnYTSz8WKpd6FEfYujQ%2Bh0ppidUpcc7T27LXkL2yRJcRvaBnLaoOxM2DCFJ4fGWkQGwid5db61C\"}]}","nel":"{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}","cf-ray":"a4cf5b6f8bcd1349-KIX"},"status":400}
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1; insert 14ec3807ea58d49b6298a9189ae71f7ee6111bf5bd6bb9f5c69dc577aeb38959 (0 deposits, 2 notes)
+indexer: Pool history has not reached the current pool UTXO
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"25f084dc-c397-45c1-a1d2-c7221e558d42"}}
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1
+round: indexed 1
+round: indexed 1; insert d1d8d93f35114c4f3bc9867a9cc22945904beb4e58c0a4b897812b86d175a3f8 (0 deposits, 2 notes)
+round: indexed 1

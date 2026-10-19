@@ -20,6 +20,7 @@ coverage/
 deployments/*/asp-store*.json
 deployments/*/asp-store*.json.tmp
 deployments/*/demo-store*.json
+deployments/*/burst-store*
 
 # local tooling
 .DS_Store

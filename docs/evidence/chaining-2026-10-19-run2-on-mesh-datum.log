@@ -1,0 +1,24 @@
+Relayer top-up ad70867f1e41069439619e38cc92bdb5fd19eb3b994607315089212616712a92 of 11489312 lovelace submitted in 2.174 seconds
+Relayer top-up ad70867f1e41069439619e38cc92bdb5fd19eb3b994607315089212616712a92 confirmed in 16.510 seconds
+Wallet 0 reuses note c4
+Wallet 1 reuses note c3
+Wallet 2 reuses note c3
+Wallet 3 reuses note c2
+Wallet 4 reuses note c3
+All 5 wallets are spendable
+Wallet 0 settle failed to start: Could not build or submit the settle transaction
+Wallet 1 settle failed to start: Could not build or submit the settle transaction
+Wallet 2 settle 7f38a189-b834-411d-821c-fe2374edd950 submitted as 2268e697d6bf476982b0bfdea61b2d4e3153278aca71c125a2fa0c350eb2e043 in 164.213 seconds
+Wallet 3 settle 1cfb26b9-0d9c-4730-a615-5d2bc56bd8af submitted as 02432090cd9404e7642406a2a793665503026ac99ac42a4e1f7192de9b304327 in 164.213 seconds
+Wallet 4 settle 82e27b66-dc9c-4ac0-8e9e-96fa37652833 submitted as 829a93398152899c657343625364dd54a5b9a297a409bdcc53345e79e9b84c09 in 164.213 seconds
+Settle 7f38a189-b834-411d-821c-fe2374edd950 confirmed in 164.976 seconds
+Settle 82e27b66-dc9c-4ac0-8e9e-96fa37652833 confirmed in 165.462 seconds
+Settle 1cfb26b9-0d9c-4730-a615-5d2bc56bd8af confirmed in 198.881 seconds
+index  settle                                                              status       block  seconds
+0      -                                                                   start_failed  -      -
+1      -                                                                   start_failed  -      -
+2      2268e697d6bf476982b0bfdea61b2d4e3153278aca71c125a2fa0c350eb2e043    confirmed    5310235  164.976
+3      02432090cd9404e7642406a2a793665503026ac99ac42a4e1f7192de9b304327    confirmed    5310239  198.881
+4      829a93398152899c657343625364dd54a5b9a297a409bdcc53345e79e9b84c09    confirmed    5310237  165.462
+Burst of 5: 3 confirmed in 3 distinct blocks, last confirmation after 198.881 seconds
+exit 0

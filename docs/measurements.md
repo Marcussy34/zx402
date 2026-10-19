@@ -435,6 +435,66 @@ From the block of the deposit to the block of the second stealth leg, 224 second
 That covers the deposit, its insertion, its approval, the private settlement and the payment to the seller, each started by hand after the previous one confirmed.
 An indexer that starts cold replayed this history of five pool transactions in about 10 seconds.
 
+### Relayer chaining on Preprod, 2026-10-19
+
+The node can chain pool transactions: a Settle builds on the pool output of a Settle that is still pending (SPEC 8.2, `ZX402_MAX_PENDING`).
+The burst command (`npm run burst -w ops -- --count 5`) starts five private payments at the same moment, each from its own note, and reports where they land.
+Every run used the zx402 pool `60279ebf…f3ed`, a token pool in tUSDM, through Blockfrost.
+
+#### The result
+
+The fair comparison is runs 4 and 5: the same code, with chaining on and off.
+
+| Run | `ZX402_MAX_PENDING` | Confirmed | Blocks | First to last payment block | Last confirmation after the start |
+|---|---|---|---|---|---|
+| 5 | 1 (off) | 5 of 5 | 5 blocks over 9 heights, 5310449 to 5310457 | 203 s (12:30:38 to 12:34:01 UTC) | 296 s |
+| 4 | 4 (on) | 5 of 5 | 5 consecutive blocks, 5310398 to 5310402 | 84 s (12:14:45 to 12:16:09 UTC) | 141 s |
+
+With chaining, the pool advanced in every block until the burst was done, and the last payment confirmed about 2.1 times sooner.
+The payments still landed one per block, not several in one block. The relayer handles one Settle at a time, and each took about 18 seconds (all five were submitted within 91 seconds). That is close to one block time, so each block caught one Settle. Several Settles per block is the next step: the relayer must verify proofs and build in parallel.
+
+#### What the runs before found
+
+Runs 1a to 3 failed in ways that the local test chain could not show. Each failure led to a fix in this branch.
+
+| Run | Setting | Result | Cause | Fix |
+|---|---|---|---|---|
+| 1a | off | 1 of 5 confirmed | The relayer had one ADA-only output. The first Settle spent it as a fee input, and its change holds the relayer's tUSDM fee, so no ADA-only output was left for collateral: `Payer needs an ADA-only collateral UTXO with at least 5 ADA` | The burst top-up keeps a dedicated 5 ADA collateral output (`relayerTopUp`, OPS-07) |
+| 1 | off | 5 of 5, 5 blocks over 18 heights, 343 s | Blockfrost reported a Settle confirmed while its address view still listed the spent pool output. The next Settle built on it and was refused with `BadInputsUTxO`, and each payment lost 20 to 40 seconds to retries | The sequencer keeps a just-confirmed transaction in its view while the provider still lists an input it spent (SEQ-09) |
+| 2 | on | 3 of 5, no payment chained | Every Settle built on a pending pool output failed evaluation with an empty `ScriptFailures` map. Mesh 1.9.1 `evaluateTx` drops the inline datum of each additional UTXO, so the evaluator saw the pool input without its datum | The Blockfrost adapter posts the additional UTXOs itself, with the datum (`ogmiosAdditionalUtxo`, TX-16) |
+| 3 | on | 3 of 5 | Ogmios refused the request: `failed to decode payload from base64 or base16`. Blockfrost does not accept the dotted asset keys of the Ogmios v5.6 schema. Later, the relayer's ADA-only float ran out, and the coin selection spent the collateral output | Tokens nest by policy, as Mesh sends them. The top-up keeps an ADA-only float of 4 ADA per payment |
+
+The datum fix was checked against the live evaluator directly. A confirmed Settle (`45a6f496…`), re-evaluated with its spent inputs as additional UTXOs, returns `spend:0` with 1,039,005 memory units and 3,000,484,104 CPU steps through the fixed adapter. Without the datum, the same request fails with the empty `ScriptFailures` map of run 2.
+
+#### Every Settle
+
+| Run | Block | Settle |
+|---|---|---|
+| 1 | 5310209 | `e7f76dfa2b3b639b2d83583bcb627e3a84c420964aff7dc87402e16dd552c2af` |
+| 1 | 5310212 | `7a57772ffdfb853a004e2a24822f357bd4f3c8042a6044e7c380c7bea9779b1a` |
+| 1 | 5310213 | `eb48395369216f09bae3e0767146bed95286306b48a8a42d8d991295cbf8fcdd` |
+| 1 | 5310224 | `05b318c8a324233f7723879c04db8adb3df08d14b3db9c0c56e7b2ff2825dd41` |
+| 1 | 5310226 | `acc627f94a7b09d417bc997acca2a1848be493e96f127c4e63c4b664d296f423` |
+| 2 | 5310235 | `2268e697d6bf476982b0bfdea61b2d4e3153278aca71c125a2fa0c350eb2e043` |
+| 2 | 5310237 | `829a93398152899c657343625364dd54a5b9a297a409bdcc53345e79e9b84c09` |
+| 2 | 5310239 | `02432090cd9404e7642406a2a793665503026ac99ac42a4e1f7192de9b304327` |
+| 3 | 5310354 | `d390a1105906bad5e3326d89f392a01cc18074251b879b640d2fab5cf26f164f` |
+| 3 | 5310355 | `21a6e098988ed2013421268de901e38bf959e531573e23854258c09a076859e3` |
+| 3 | 5310357 | `45a6f496f386b2c26faf65b5870d526c3c3543ec5d4e103024d1bd124650b5f8` |
+| 4 | 5310398 | `54e7d52ba673e9e84874391f631f06ccacc8d4cab3f8b776e6d202e7806deb79` |
+| 4 | 5310399 | `27d14061011f4b5707000fa500ad24a39f234562e4424079aa6ff5b19b692b1a` |
+| 4 | 5310400 | `ae33af6bfd8919c4de5416258d3affc2caf07c8d7fe30a669202c0a7849301f0` |
+| 4 | 5310401 | `541ddc98c667d00365962bb72c1786e406920fbd165c90d12b5a1a263db42018` |
+| 4 | 5310402 | `8e9fe76502af4306fce8f749f98bb82f234c878703e8c59639b49c566ff51a9b` |
+| 5 | 5310449 | `4ec2525e17fd4e2b3496440e0bbff83a34e8d4fe27c5e570d2276bf6dc4aa8cb` |
+| 5 | 5310450 | `264869f1f74fc006aca8d2282c2da44006f8c3f1813ee2d7215a1da2a1a6c5ed` |
+| 5 | 5310453 | `95fbbd424a53fcc14d1e4343b4266c33461baa2d38621b04b12e74b4c4bc28ff` |
+| 5 | 5310455 | `942ad136467cab58f206dbb5b51b9ca542bb77c46c1c00fb8a1f0abb7ab22100` |
+| 5 | 5310457 | `ab22bcb151ddbd9a0892bfa082f8c9ceaf8f85dde63ba037ce1a2125b29caa7d` |
+
+The terminal output of each run and the node logs are in `docs/evidence/chaining-2026-10-19-*.log`.
+`ZX402_MAX_PENDING` stays 1 by default until a run lands several payments in one block.
+
 ## 5. Differences from the Spec estimates
 
 No estimate in SPEC section 10.3 was wrong by more than 20 percent.
