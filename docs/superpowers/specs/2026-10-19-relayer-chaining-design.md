@@ -135,7 +135,7 @@ Every chained transaction is evaluated before it is submitted, with the pending 
 
 - The relayer and the crank have separate fee wallets (`ops/src/node.ts:217`). Each role chains on its own change.
 - A role's next transaction pays its fee from the change output of its last pending transaction, passed in through `payer.utxos`. It never reuses a confirmed fee UTXO that a pending transaction already spent.
-- Collateral stays on a confirmed, ADA-only output that no transaction spends as a fee input. Collateral is only taken if a script fails, which evaluation prevents.
+- Collateral comes from the same view of the wallet, so it can be a pending change output. That is safe: if the parent drops, the child drops with it. Collateral is only taken if a script fails, which evaluation prevents.
 
 ### 5.5 Limits
 
@@ -183,11 +183,13 @@ After that it counts as rejected.
 **Finding a dropped transaction.** The provider gains one read: whether a transaction is still in the mempool.
 Blockfrost answers it with `GET /mempool/{hash}`, which lists the transactions submitted through Blockfrost (blockfrost/openapi on GitHub). The FakeChain answers it from its own mempool.
 
-**Each round, the sequencer reconciles** the pending list with the confirmed pool UTXO:
+**Each round, the sequencer reconciles** the pending list, oldest entry first, using the provider's transaction status:
 
-1. If the confirmed pool UTXO is the output of pending entry k, entries 1 to k are confirmed. They leave the list.
-2. If it is still the confirmed head we knew, the sequencer checks the oldest pending entry. If that entry is neither confirmed nor in the mempool on two reads in a row, it was dropped. The sequencer **resets**.
-3. Otherwise the chain broke. Another party spent the pool, or a rollback happened. The sequencer **resets**.
+1. `confirmed`: the entry leaves the list, and the walk goes on to the next one.
+2. `mempool`: the entry is still waiting. The walk stops.
+3. `unknown` on two reads in a row: the entry was dropped. The sequencer **resets**.
+
+Another party spending the pool first needs no separate check. A node evicts a transaction whose input is gone, so it reads `unknown` and leads to a reset. A check on spent inputs would misfire while Blockfrost lags behind a new block, and reset a transaction that already landed.
 
 The sequencer also resets when:
 
