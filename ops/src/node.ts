@@ -148,7 +148,9 @@ export async function startNode(o: NodeOptions): Promise<Zx402Node> {
         const deposits = await indexer.getDeposits();
         if (deposits.some(d => d.status === 'absorbed' && d.label !== null && !approved.includes(d.label))
           || !isDeepStrictEqual(asp.leaves(pool.aspRoot), approved)) {
-          await step('asp', [pool.aspRoot, deposits.filter(d => d.status === 'absorbed').map(d => d.label), approved], async () => {
+          // The gate opens when a pending Settle confirms, so a blocked update runs again at once.
+          await step('asp', [pool.aspRoot, deposits.filter(d => d.status === 'absorbed').map(d => d.label), approved,
+            sequencer.canSubmit('asp')], async () => {
             const result = await asp.tick();
             if (result.txId) {
               indexer.expectChange();

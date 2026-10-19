@@ -118,7 +118,9 @@ test('ASP-01: a dropped submission is retried after two reconciles', async t => 
     submissions += 1;
     return submit(cbor);
   });
-  const sequencer = new Sequencer({ ctx, status: chain });
+  // The sequencer counts a missing read once per unseenGapMs, so the test steps its clock between reconciles.
+  let skew = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, now: () => Date.now() + skew });
   const service = new AspService({ ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp], storePath });
   const first = await service.tick();
   assert.ok(first.txId);
@@ -128,6 +130,7 @@ test('ASP-01: a dropped submission is retried after two reconciles', async t => 
   // Two unknown status reads in a row mean the transaction was dropped.
   chain.dropTransaction(first.txId);
   assert.equal(await sequencer.reconcile(), null);
+  skew += 5_000;
   assert.equal((await sequencer.reconcile())?.reason, 'dropped');
   const retry = await service.tick();
   assert.ok(retry.txId);
@@ -243,7 +246,9 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
   });
 
   await t.test('REL-10 a waiting ASP update holds new settles', async () => {
-    const held = new Sequencer({ ctx, status: chain, maxPending: 2 });
+    // The test steps this clock past unseenGapMs between reconciles. The ASP hold uses it too.
+    let skew = 0;
+    const held = new Sequencer({ ctx, status: chain, maxPending: 2, now: () => Date.now() + skew });
     const aspTree = MerkleTree.fromLeaves(service.leaves());
     const user = keys.users.findIndex(seed => hex(keyHash(seed)) === plan.deposits[1]!.datum.refund);
     const note: Note = { ...secrets[user]!, ...plan.credited[1]! };
@@ -277,6 +282,7 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
     // Drop the Settle so the next test builds on the same confirmed head.
     assert.deepEqual(chain.dropTransaction(settle.txId), [settle.txId]);
     assert.equal(await held.reconcile(), null);
+    skew += 5_000;
     assert.equal((await held.reconcile())?.reason, 'dropped');
   });
 

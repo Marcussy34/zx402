@@ -12,10 +12,10 @@ import {
 } from '@zx402/crypto';
 import { devKeysPresent, loadDevArtifacts, loadDevVkey, prove, shutdown } from '@zx402/prover';
 import {
-  Sequencer, SubmitRejected, assetAmount, assetWireUnit, buildAspUpdate, buildDeposit, buildInsert, buildSettle, complete, decodePoolRedeemer, decodeTx,
-  encodeConfigDatum, encodeVoid, enterpriseAddress, keyHash, newTxBuilder, nullifierInsertion, planInsert,
-  readAsp, readConfig, readDeposits, readPool, signTx, timeToSlot, utxoToMesh,
-  type ChainContext,
+  Sequencer, SubmitRejected, assetAmount, assetWireUnit, buildAspUpdate, buildDeposit, buildInsert, buildSettle, complete,
+  decodePoolDatum, decodePoolRedeemer, decodeTx, encodeConfigDatum, encodePoolDatum, encodeVoid, enterpriseAddress, keyHash,
+  newTxBuilder, nullifierInsertion, planInsert, readAsp, readConfig, readDeposits, readPool, signTx, timeToSlot, utxoToMesh,
+  type ChainContext, type PoolDatum,
 } from '@zx402/txlib';
 import { startDevnet } from '@zx402/txlib/testing/devnet';
 import { Relayer } from '../src/index.js';
@@ -273,12 +273,20 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
     pending = [];
     return block;
   };
+  // The sequencer counts a missing transaction once per unseenGapMs, so drop tests step its clock between reconciles.
+  let skew = 0;
+  const sequencerNow = () => Date.now() + skew;
+  const reconcileTwice = async (sequencer: Sequencer) => {
+    await sequencer.reconcile();
+    skew += 5_000;
+    await sequencer.reconcile();
+  };
   const chained = async (body: (owner: Relayer, sequencer: Sequencer,
     settle: (request: SettleRequest) => Promise<SettleStatus>) => Promise<void>, quoteTtlMs = 600_000) => {
     const height = chain.blocks().length;
     const spentCount = spent.length;
     const saved = now;
-    const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2 });
+    const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2, now: sequencerNow });
     const owner = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
       quoteTtlMs, retryDelayMs: 5, now: () => now });
     const work: Promise<SettleStatus>[] = [];
@@ -360,8 +368,7 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
       const original = chain.transaction(results[0]!.txHash)!.cbor;
       assert.deepEqual(chain.dropTransaction(results[0]!.txHash), results.map(result => result.txHash));
       await rotateFeeInput(original);
-      await sequencer.reconcile();
-      await sequencer.reconcile();
+      await reconcileTwice(sequencer);
       await waitFor(() => chain.mempoolTxIds().length === 2, 'both dropped settles must be rebuilt');
       const rebuilt = chain.mempoolTxIds();
       assert.deepEqual(mineConfirmed().txIds, rebuilt);
@@ -399,8 +406,7 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
       const competing = await directSettle(requests[1]!);
       await submit(competing.signed);
       assert.deepEqual(mineConfirmed().txIds, [competing.txId]);
-      await sequencer.reconcile();
-      await sequencer.reconcile();
+      await reconcileTwice(sequencer);
       await waitFor(() => chain.mempoolTxIds().length === 1, 'the dropped settle must rebuild on the competing head');
       const rebuilt = chain.mempoolTxIds()[0]!;
       assert.ok(decodeTx(chain.transaction(rebuilt)!.cbor).inputs.some(ref => ref.txId === competing.txId));
@@ -419,8 +425,7 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
       const original = chain.transaction(result.txHash)!.cbor;
       chain.dropTransaction(result.txHash);
       await rotateFeeInput(original);
-      await sequencer.reconcile();
-      await sequencer.reconcile();
+      await reconcileTwice(sequencer);
       await waitFor(() => chain.mempoolTxIds().length === 1, 'the dropped settle must be rebuilt before replay');
       const rebuilt = chain.mempoolTxIds()[0]!;
       assert.notEqual(rebuilt, result.txHash);
@@ -438,6 +443,81 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
       const outputs = await chain.getUtxosAt(first.intent.payouts[0]!.address);
       assert.equal(outputs.reduce((sum, utxo) => sum + utxo.value.lovelace, 0n), 2_000_000n);
     });
+  });
+  await t.test('REL-11 a parent confirmed before the indexer syncs keeps its nullifier', async () => {
+    await chained(async (owner, sequencer, settle) => {
+      const parent = await settle(await freshRequest(first, owner));
+      // The block lands and reconcile confirms the parent, but the indexer has not seen it yet.
+      assert.deepEqual(chain.mineBlock().txIds, [parent.txHash]);
+      await sequencer.reconcile();
+      assert.deepEqual(sequencer.pending(), []);
+      assert.ok(!spent.includes(first.publicInputs.nullifierHash));
+      const child = await settle(await freshRequest(requests[1]!, owner));
+      assert.equal(child.status, 'submitted');
+      assert.deepEqual(chain.mempoolTxIds(), [child.txHash]);
+    });
+  });
+  await t.test('REL-11 a gate closed between the wait and the lock makes the settle wait, not fail', async () => {
+    const sequencer = new Sequencer({ ctx, status: chain });
+    const owner = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
+      quoteTtlMs: 600_000, retryDelayMs: 5, now: () => now });
+    const request = await freshRequest(first, owner);
+    const original = chain.submit;
+    const height = chain.blocks().length;
+    // A crank fee-wallet transfer stands in for an Insert: the sequencer gates on kinds, not on contents.
+    const crank = payer(keys.crank).address;
+    const input = (await chain.getUtxosAt(crank)).reduce((a, b) => b.value.lovelace > a.value.lovelace ? b : a);
+    const transfer = await complete({ provider: chain, network }, (await newTxBuilder({ provider: chain, network }))
+      .txOut(crank, [{ unit: 'lovelace', quantity: String(input.value.lovelace / 2n) }]), { payer: { address: crank, utxos: [input] } });
+    const reconcile = sequencer.reconcile.bind(sequencer);
+    const run = sequencer.run.bind(sequencer);
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    let closer: Promise<unknown> | undefined;
+    let reconciles = 0;
+    sequencer.reconcile = async () => {
+      // The relayer's second room check comes after the closed gate. The stand-in confirms in this block.
+      if (++reconciles === 2) chain.mineBlock();
+      const result = await reconcile();
+      // After the relayer's first room check passes, this run takes the lock first and fills maxPending 1.
+      closer ??= run(async () => { await released; return sequencer.submit(signTx(transfer.cbor, [keys.crank]), { kind: 'insert' }); });
+      return result;
+    };
+    sequencer.run = <T>(fn: () => Promise<T>) => { release(); return run(fn); };
+    let submits = 0;
+    chain.submit = async cbor => {
+      // Two refusals leave one attempt, which the closed gate must not have used.
+      if (decodeTx(cbor).txId !== transfer.txId && ++submits <= 2) throw new SubmitRejected('private ledger refusal', 'other');
+      return original(cbor);
+    };
+    try {
+      const result = await owner.settle(request);
+      assert.equal((await closer as { status: string }).status, 'accepted');
+      assert.equal(await chain.transactionStatus(transfer.txId), 'confirmed');
+      assert.equal(result.status, 'submitted');
+      assert.equal(submits, 3);
+      assert.deepEqual(chain.mempoolTxIds(), [result.txHash]);
+    } finally {
+      chain.submit = original;
+      chain.rollback(chain.blocks().length - height);
+      pending = [];
+    }
+  });
+  await t.test('REL-11 a wait ends at the quote deadline', async () => {
+    const sequencer = new Sequencer({ ctx, status: chain });
+    const ttl = 1_500;
+    let started: number | undefined;
+    // The quote starts the clock at its own time. Then real time passes, so a wait can reach the deadline.
+    const clock = () => first.intent.validUntil - ttl + (started === undefined ? 0 : performance.now() - started);
+    const owner = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
+      quoteTtlMs: ttl, retryDelayMs: 10_000, now: clock });
+    const request = await freshRequest(first, owner);
+    // A waiting ASP update keeps the Settle gate closed for longer than the quote lives.
+    sequencer.holdForAsp();
+    started = performance.now();
+    await rejects(owner.settle(request), 'quote_expired');
+    const late = performance.now() - started - ttl;
+    assert.ok(late >= 0 && late < 500, `quote_expired arrived ${Math.round(late)} ms after the deadline`);
   });
   await t.test('REL-03: invalid proofs and mismatched intents never reach submission', async () => {
     const before = submissions;
@@ -491,13 +571,26 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
   await t.test('REL-04: stale roots and a full queue report their own errors', async () => {
     const before = submissions;
     const original = indexer.getPool;
-    indexer.getPool = async () => ({ ...await original(), roots: [1n] });
-    await rejects(relayer.settle(first), 'stale_root');
-    indexer.getPool = async () => ({ ...await original(), aspRoot: 1n });
-    await rejects(relayer.settle(first), 'stale_asp_root');
-    indexer.getPool = async () => ({ ...await original(), queue: Array<bigint>(8).fill(1n) });
-    await rejects(relayer.settle(first), 'queue_full');
-    indexer.getPool = original;
+    const getUtxosAt = chain.getUtxosAt;
+    const nft = ctx.deployment.poolId + Buffer.from('pool').toString('hex');
+    // The Settle spends the sequencer head, so the head's roots and queue decide these refusals.
+    const head = (change: Partial<PoolDatum>) => {
+      chain.getUtxosAt = async address => (await getUtxosAt.call(chain, address)).map(utxo => utxo.value.assets[nft] === 1n
+        ? { ...utxo, inlineDatum: encodePoolDatum({ ...decodePoolDatum(utxo.inlineDatum!), ...change }) } : utxo);
+    };
+    try {
+      head({ roots: [1n] });
+      await rejects(relayer.settle(first), 'stale_root');
+      chain.getUtxosAt = getUtxosAt;
+      indexer.getPool = async () => ({ ...await original(), aspRoot: 1n });
+      await rejects(relayer.settle(first), 'stale_asp_root');
+      indexer.getPool = original;
+      head({ queue: Array<bigint>(8).fill(1n) });
+      await rejects(relayer.settle(first), 'queue_full');
+    } finally {
+      chain.getUtxosAt = getUtxosAt;
+      indexer.getPool = original;
+    }
     assert.equal(submissions, before);
   });
   await t.test('REL-02: failed builds log the underlying error and keep API errors general', async () => {
@@ -536,7 +629,7 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
     ['expired', 'REL-05: a submit that failed for good stays uncertain until a reset, then fails at its deadline'],
   ] as const) {
     await t.test(name, async () => {
-      const sequencer = new Sequencer({ ctx, status: chain });
+      const sequencer = new Sequencer({ ctx, status: chain, now: sequencerNow });
       const owner = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
         quoteTtlMs: 600_000, retryDelayMs: 5, now: () => now });
       const request = await freshRequest(first, owner);
@@ -585,8 +678,7 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
           chain.submit = original;
           const before = submissions;
           // Two reads that cannot find the transaction reset it as dropped.
-          await sequencer.reconcile();
-          await sequencer.reconcile();
+          await reconcileTwice(sequencer);
           await waitFor(() => chain.mempoolTxIds().length === 1, 'a dropped settle with a valid quote must be rebuilt');
           assert.equal(submissions, before + 1, 'one rebuild reaches submission');
           assert.equal((await owner.getSettle(request.quoteId)).status, 'submitted');
@@ -600,8 +692,7 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
         } else {
           // The quote expires before the reset, so nothing is rebuilt.
           now = request.intent.validUntil;
-          await sequencer.reconcile();
-          await sequencer.reconcile();
+          await reconcileTwice(sequencer);
           assert.equal((await owner.getSettle(request.quoteId)).status, 'submitted', 'wall-clock expiry is not confirmed chain expiry');
           chain.mineBlock(timeToSlot(request.intent.validUntil, network) - (await chain.getTip()).slot + 1);
           await sequencer.reconcile();
@@ -970,6 +1061,44 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
       spent.length = spentCount;
       pending = [];
     }
+  });
+  await t.test('REL-11 queue and root checks use the sequencer head', async () => {
+    await chained(async (owner, sequencer, settle) => {
+      // A pending Insert flushes a queue entry and adds a root. The confirmed indexer view has neither yet.
+      const insertion = await sequencer.run(async () => {
+        const head = await readPool(sequencer.ctx);
+        const plan = planInsert({ poolId: ctx.deployment.poolId, pool: head, config: (await readConfig(sequencer.ctx)).datum, deposits: [] });
+        assert.ok(plan);
+        plan.flush = 1;
+        plan.slots = plan.slots.slice(0, 1);
+        const witness = insertWitness({ tree, slots: plan.slots });
+        const tx = await buildInsert(sequencer.ctx, { payer: payer(keys.crank), pool: head, plan,
+          proof: (await prove(artifacts.insert, witness.input)).cardano, newRoot: witness.newRoot });
+        const result = await sequencer.submit(signTx(tx.cbor, [keys.crank]), { kind: 'insert' });
+        assert.equal(result.status, 'accepted');
+        return { txId: result.txId, tree: witness.tree };
+      });
+      // Prove the last note against the head's newest root.
+      const base = requests[3]!;
+      const fresh = deriveNoteSecrets(sellers[3]!, 1);
+      const witness = spendWitness({ note: notes[3]!, stateTree: insertion.tree, stateIndex: 3, aspTree, aspIndex: 3,
+        withdrawn: base.publicInputs.withdrawn, newNullifier: fresh.nullifier, newSecret: fresh.secret, context: base.publicInputs.context });
+      const proof = await prove(artifacts.spend, witness.input);
+      const request: SettleRequest = { ...await freshRequest(base, owner),
+        proof: { a: hex(proof.cardano.a), b: hex(proof.cardano.b), c: hex(proof.cardano.c) },
+        publicInputs: { ...base.publicInputs, newCommitment: witness.public.newCommitment,
+          nullifierHash: witness.public.nullifierHash, stateRoot: insertion.tree.root } };
+      assert.ok(!(await indexer.getPool()).roots.includes(insertion.tree.root), 'the indexer view lags the pending Insert');
+      const getPool = indexer.getPool;
+      // The confirmed view reports a full queue, but the head the Settle spends has room.
+      indexer.getPool = async () => ({ ...await getPool(), queue: Array<bigint>(8).fill(1n) });
+      try {
+        const result = await settle(request);
+        assert.equal(result.status, 'submitted');
+        assert.ok(decodeTx(chain.transaction(result.txHash)!.cbor).inputs.some(ref => ref.txId === insertion.txId));
+        assert.deepEqual(chain.mempoolTxIds(), [insertion.txId, result.txHash]);
+      } finally { indexer.getPool = getPool; }
+    });
   });
   await t.test('REL-01: old submissions expire after the default retention period during quote', async () => {
     const saved = now;

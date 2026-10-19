@@ -14,8 +14,8 @@ import { createZx402, fileStore } from '@zx402/core';
 import { addressFromBech32, deriveNoteSecrets, precommitment, vkToCardano } from '@zx402/crypto';
 import { devKeysPresent, loadDevArtifacts, loadDevVkey, shutdown } from '@zx402/prover';
 import {
-  buildDeposit, decodePoolDatum, decodePoolRedeemer, decodeTx, encodeDepositDatum, enterpriseAddress, keyHash, readPool, signTx, timeToSlot, vkToHex,
-  type TxView, type Utxo,
+  buildDeposit, complete, decodePoolDatum, decodePoolRedeemer, decodeTx, encodeDepositDatum, enterpriseAddress, keyHash, newTxBuilder,
+  readPool, signTx, timeToSlot, vkToHex, type TxView, type Utxo,
 } from '@zx402/txlib';
 import { FakeChain } from '@zx402/txlib/testing/fake-chain';
 import { startDevnet } from '@zx402/txlib/testing/devnet';
@@ -144,6 +144,44 @@ test('E2E-04, CRK-01, ASP-01: idle steps wait for changed snapshots or their ret
   chain.mineBlock();
   await node.tick();
   assert.equal(approval.mock.callCount(), approvals + 1, 'A changed confirmed ASP root must bypass the retry delay');
+});
+
+test('E2E-04, ASP-01: the association step runs again as soon as the ASP gate opens', {
+  timeout: 900_000,
+  skip: devKeysPresent(root) ? false : 'Development proving keys are absent: circuits/build/dev/manifest.json is required',
+}, async t => {
+  const { startNode } = await import('../src/node.js');
+  const { chain, ctx, keys, run } = await startDevnet();
+  const network = ctx.deployment.network;
+  chain.advanceSlots(timeToSlot(Date.now(), network));
+  // A fixed clock keeps every idle step inside its retry delay, so only a changed snapshot can wake it.
+  const node = await startNode({ ctx, history: chain, seeds: keys,
+    insertArtifacts: await loadDevArtifacts('insert', root), spendVkey: await loadDevVkey('spend', root),
+    intervalMs: 0, ports: { indexer: 0, relayer: 0 }, now: () => 1_000 });
+  t.after(() => node.close());
+  const secrets = deriveNoteSecrets(keys.users[0]!, 0);
+  await run(await buildDeposit(ctx, { payer: { address: enterpriseAddress(keys.users[0]!, network) }, amount: 10_000_000n,
+    precommitment: precommitment(secrets.nullifier, secrets.secret),
+    refundKeyHash: Buffer.from(keyHash(keys.users[0]!)).toString('hex') }), [keys.users[0]!]);
+  await node.tick();
+  assert.deepEqual(node.sequencer.pending().map(entry => entry.kind), ['insert']);
+  chain.mineBlock();
+  // The confirmed Insert leaves the pending list, so maxPending 1 has room for the stand-in.
+  await node.sequencer.reconcile();
+  // A plain transfer stands in for a pending Settle: the sequencer gates on kinds, not on contents.
+  const operator = enterpriseAddress(keys.operator, network);
+  const input = (await chain.getUtxosAt(operator)).reduce((a, b) => b.value.lovelace > a.value.lovelace ? b : a);
+  const transfer = await complete({ provider: chain, network }, (await newTxBuilder({ provider: chain, network }))
+    .txOut(operator, [{ unit: 'lovelace', quantity: String(input.value.lovelace / 2n) }]), { payer: { address: operator, utxos: [input] } });
+  await node.sequencer.run(() => node.sequencer.submit(signTx(transfer.cbor, [keys.operator]), { kind: 'settle' }));
+  // The first round approves the absorbed label. The second finds the update blocked and leaves the step idle.
+  await node.tick();
+  await node.tick();
+  assert.equal(node.sequencer.canSubmit('asp'), false);
+  assert.deepEqual(chain.mempoolTxIds(), [transfer.txId]);
+  chain.mineBlock();
+  await node.tick();
+  assert.deepEqual(node.sequencer.pending().map(entry => entry.kind), ['asp'], 'the open gate must wake the idle association step');
 });
 
 test('E2E-18 the node chains two private payments in one block', {

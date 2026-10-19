@@ -1,7 +1,7 @@
 import { setTimeout } from 'node:timers/promises';
 import type { ChainContext } from './context.js';
 import { decodeTx, outputsOf } from './txview.js';
-import { SubmitRejected, type Provider, type TxStatus, type TxStatusReader, type Utxo, type UtxoRef } from './types.js';
+import { slotToTime, SubmitRejected, type Provider, type TxStatus, type TxStatusReader, type Utxo, type UtxoRef } from './types.js';
 
 export type PoolTxKind = 'settle' | 'insert' | 'asp';
 export interface PendingEntry {
@@ -23,10 +23,13 @@ export class Sequencer {
   private readonly childRetryMs: number;
   private readonly childRetryForMs: number;
   private readonly unseenLimit: number;
+  private readonly unseenGapMs: number;
+  private readonly lastUnseen = new WeakMap<PendingEntry, number>();
   private readonly aspHoldMs: number;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
   private entries: PendingEntry[] = [];
+  private confirmedNullifiers: bigint[] = [];
   private holdUntil = 0;
   private lock: Promise<void> = Promise.resolve();
   private resets: ResetEvent[] = [];
@@ -34,7 +37,7 @@ export class Sequencer {
 
   constructor(a: {
     ctx: ChainContext; status: TxStatusReader; maxPending?: number;
-    childRetryMs?: number; childRetryForMs?: number; unseenLimit?: number;
+    childRetryMs?: number; childRetryForMs?: number; unseenLimit?: number; unseenGapMs?: number;
     aspHoldMs?: number; now?: () => number;
     log?: (line: string) => void;
   }) {
@@ -46,6 +49,10 @@ export class Sequencer {
     this.aspHoldMs = a.aspHoldMs ?? 120_000;
     if (!Number.isSafeInteger(this.aspHoldMs) || this.aspHoldMs <= 0) {
       throw new RangeError('aspHoldMs must be a positive safe integer');
+    }
+    this.unseenGapMs = a.unseenGapMs ?? 5_000;
+    if (!Number.isSafeInteger(this.unseenGapMs) || this.unseenGapMs <= 0) {
+      throw new RangeError('unseenGapMs must be a positive safe integer');
     }
     this.now = a.now ?? Date.now;
     this.provider = a.ctx.provider;
@@ -100,10 +107,13 @@ export class Sequencer {
 
   /** Call inside run: submission shares the build's lock and must not acquire it again. */
   async submit(signedCbor: string, meta: { kind: PoolTxKind; nullifier?: bigint }): Promise<SubmitResult> {
+    // Recheck under the build's lock before touching the provider.
+    if (!this.canSubmit(meta.kind)) throw new Error(`Sequencer gate is closed for ${meta.kind}`);
     const view = decodeTx(signedCbor);
     const pendingOutputs = new Set(this.entries.flatMap(entry => entry.outputs.map(output => refKey(output.ref))));
     const child = view.inputs.some(ref => pendingOutputs.has(refKey(ref)));
-    const deadline = performance.now() + this.childRetryForMs;
+    const deadline = Math.min(this.now() + this.childRetryForMs,
+      view.invalidHereafter === null ? Infinity : slotToTime(view.invalidHereafter, this.ctx.deployment.network));
     let status: 'accepted' | 'unknown' = 'accepted';
     for (;;) {
       try { await this.provider.submit(signedCbor); break; }
@@ -117,9 +127,13 @@ export class Sequencer {
           break;
         }
         if (error.reason === 'bad_inputs' && child) {
-          const remaining = deadline - performance.now();
+          const remaining = deadline - this.now();
           // Different backend nodes may learn the parent at different times.
-          if (remaining > 0) { await setTimeout(Math.min(this.childRetryMs, remaining)); continue; }
+          if (remaining > 0) {
+            await setTimeout(Math.min(this.childRetryMs, remaining));
+            // Expiry can pass while the retry timer is waiting.
+            if (this.now() < deadline) continue;
+          }
           this.reset('rejected_child');
         }
         return { status: 'rejected', txId: view.txId, reason: error.reason, message: error.message };
@@ -135,15 +149,31 @@ export class Sequencer {
 
   reconcile(): Promise<ResetEvent | null> {
     return this.withLock(async () => {
-      while (this.entries.length > 0) {
-        const entry = this.entries[0]!;
+      // Independent ASP entries can confirm behind a pending pool transaction.
+      for (let i = 0; i < this.entries.length;) {
+        const entry = this.entries[i]!;
         const status = await this.transactionStatus(entry.txId);
-        if (status === 'confirmed') { this.entries.shift(); continue; }
+        if (status === 'confirmed') {
+          this.entries.splice(i, 1);
+          // Keep nullifiers through the indexer's confirmation lag.
+          if (entry.kind === 'settle' && entry.nullifier !== null) {
+            this.confirmedNullifiers.push(entry.nullifier);
+            if (this.confirmedNullifiers.length > 64) this.confirmedNullifiers.shift();
+          }
+          continue;
+        }
         if (status === 'mempool') entry.unseen = 0;
-        // One missing read can be indexing lag after a block, rather than eviction.
-        else if (++entry.unseen >= this.unseenLimit) return this.reset('dropped');
-        break;
+        else {
+          const now = this.now();
+          // Rapid reconciles must not turn one indexing gap into an eviction.
+          if (now - (this.lastUnseen.get(entry) ?? -Infinity) >= this.unseenGapMs) {
+            entry.unseen++;
+            this.lastUnseen.set(entry, now);
+          }
+        }
+        i++;
       }
+      if (this.entries.some(entry => entry.unseen >= this.unseenLimit)) return this.reset('dropped');
       if (this.entries.length > 0) {
         const tip = await this.provider.getTip();
         if (this.entries.some(entry => entry.invalidHereafter < tip.slot)) return this.reset('expired');
@@ -158,11 +188,14 @@ export class Sequencer {
   pendingNullifiers(): bigint[] {
     return this.entries.flatMap(entry => entry.kind === 'settle' && entry.nullifier !== null ? [entry.nullifier] : []);
   }
+  recentNullifiers(): bigint[] { return [...new Set([...this.confirmedNullifiers, ...this.pendingNullifiers()])]; }
   onReset(listener: (event: ResetEvent) => void | Promise<void>): void { this.listeners.push(listener); }
 
   private reset(reason: ResetEvent['reason']): ResetEvent {
     const event = { reason, dropped: this.entries };
     this.entries = [];
+    // Reserve Settle capacity until the ASP service can resubmit its update.
+    if (event.dropped.some(entry => entry.kind === 'asp')) this.holdForAsp();
     this.resets.push(event);
     return event;
   }

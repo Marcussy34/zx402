@@ -174,7 +174,9 @@ test('CRK-01, CRK-02, CRK-03: real proof crank rounds', {
   });
   await t.test('CRK-01: a dropped insertion retries after two reconciles', async () => {
     await deposit(0, 10_000_000n);
-    const retrySequencer = new Sequencer({ ctx, status: chain });
+    // The sequencer counts a missing read once per unseenGapMs, so the test steps its clock between reconciles.
+    let skew = 0;
+    const retrySequencer = new Sequencer({ ctx, status: chain, now: () => Date.now() + skew });
     const retrying = new Crank({ ctx, indexer, seed: keys.crank, artifacts, sequencer: retrySequencer });
     const original = chain.submit.bind(chain);
     let attempts = 0;
@@ -189,6 +191,7 @@ test('CRK-01, CRK-02, CRK-03: real proof crank rounds', {
       // Two unknown status reads in a row mean the transaction was dropped.
       chain.dropTransaction(first.txId);
       assert.equal(await retrySequencer.reconcile(), null);
+      skew += 5_000;
       assert.equal((await retrySequencer.reconcile())?.reason, 'dropped');
       const plan = planInsert({ poolId: ctx.deployment.poolId, pool: await readPool(ctx),
         config: (await readConfig(ctx)).datum, deposits: await readDeposits(ctx) });

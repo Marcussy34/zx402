@@ -249,7 +249,7 @@ export class Relayer implements RelayerApi {
     if (!entry || entry.status.status === 'failed' || this.now() >= entry.validUntil) return;
     try {
       // A reset can be wrong while the indexer lags, and the dropped version may have landed.
-      if ((await this.nullifiers()).includes(entry.nullifier)) return;
+      if ((await this.spentNullifiers()).includes(entry.nullifier)) return;
       const sent = await this.send({ validUntil: entry.validUntil }, entry.request);
       if (!entry.txHashes.includes(sent.txId)) entry.txHashes.push(sent.txId);
       entry.status = { ...entry.status, txHash: sent.txId };
@@ -265,28 +265,49 @@ export class Relayer implements RelayerApi {
   private async send(quote: { validUntil: number }, request: SettleRequest): Promise<Sent> {
     const intent = this.intent(request.intent);
     const proof = proofBytes(request.proof);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      this.checkExpiry(quote);
-      // Wait for room among the pending pool transactions. Each reconcile can confirm or reset them.
-      for (;;) {
-        await this.sequencer.reconcile();
-        if (this.sequencer.canSubmit('settle')) break;
-        this.checkExpiry(quote);
-        await delay(this.retryDelayMs);
-      }
+    let attempts = 0;
+    for (;;) {
+      await this.waitForRoom(quote);
       const result = await this.sequencer.run(() => this.buildAndSubmit(quote, request.publicInputs, intent, proof));
+      // Another run closed the gate after the room check. That is more waiting, not a failed attempt.
+      if (result === 'wait') continue;
       if (result !== 'behind' && result.status !== 'rejected') return result;
       if (result !== 'behind') this.log('The node refused the settle transaction', new Error(result.message));
-      // The next attempt reconciles first, so a confirmed or reset head is current again.
-      if (attempt < 2) await delay(this.retryDelayMs);
-      else if (result === 'behind') this.log(notSentMessage, new Error('Indexer nullifiers are behind the pool'));
+      if (++attempts === 3) {
+        if (result === 'behind') this.log(notSentMessage, new Error('Indexer nullifiers are behind the pool'));
+        throw new NotSent();
+      }
+      // The next room check reconciles first, so a confirmed or reset head is current again.
+      await this.pause(quote);
     }
-    throw new NotSent();
+  }
+
+  /** Waits until the sequencer admits a Settle. Each reconcile can confirm or reset pending entries. */
+  private async waitForRoom(quote: { validUntil: number }): Promise<void> {
+    for (;;) {
+      this.checkExpiry(quote);
+      await this.sequencer.reconcile();
+      if (this.sequencer.canSubmit('settle')) return;
+      await this.pause(quote);
+    }
+  }
+
+  /** Sleeps retryDelayMs, but never past the quote's deadline, so an expired request answers at the deadline. */
+  private async pause(quote: { validUntil: number }): Promise<void> {
+    this.checkExpiry(quote);
+    await delay(Math.min(this.retryDelayMs, quote.validUntil - this.now()));
+  }
+
+  /** The indexer's nullifiers, plus pending and recently confirmed Settles it may not have synced yet. */
+  private async spentNullifiers(): Promise<bigint[]> {
+    return [...new Set([...await this.nullifiers(), ...this.sequencer.recentNullifiers()])];
   }
 
   /** Runs under the sequencer's lock, so the head, the pending nullifiers and the submit stay consistent. */
   private async buildAndSubmit(quote: { validUntil: number }, inputs: SettleRequest['publicInputs'], intent: SettleIntent,
-    proof: CardanoProof): Promise<SubmitResult | 'behind'> {
+    proof: CardanoProof): Promise<SubmitResult | 'behind' | 'wait'> {
+    // A run queued ahead of this one may have filled the gate since the room check.
+    if (!this.sequencer.canSubmit('settle')) return 'wait';
     let pool: PoolState;
     try { pool = await readPool(this.sequencer.ctx); }
     catch (error) {
@@ -294,14 +315,13 @@ export class Relayer implements RelayerApi {
       throw new ApiError('internal', 'Could not read the pool');
     }
     const view = await this.getPool();
-    if (!view.roots.includes(inputs.stateRoot) || !pool.datum.roots.includes(inputs.stateRoot)) {
-      throw new ApiError('stale_root', 'State root is no longer in the pool history');
-    }
+    // The Settle spends the head. The confirmed indexer view can lag a pending or just confirmed Insert.
+    if (!pool.datum.roots.includes(inputs.stateRoot)) throw new ApiError('stale_root', 'State root is no longer in the pool history');
+    // No ASP update is pending while the gate is open, so the confirmed ASP root is the one the Settle references.
     if (view.aspRoot !== inputs.aspRoot) throw new ApiError('stale_asp_root', 'ASP root has changed');
-    // The head's nullifier trie also holds the nullifiers of pending Settles.
-    const spent = [...await this.nullifiers(), ...this.sequencer.pendingNullifiers()];
+    const spent = await this.spentNullifiers();
     if (spent.includes(inputs.nullifierHash)) throw new ApiError('nullifier_spent', 'Nullifier is already spent');
-    if (view.queue.length >= 8 || pool.datum.queue.length >= 8) throw new ApiError('queue_full', 'Pool queue is full');
+    if (pool.datum.queue.length >= 8) throw new ApiError('queue_full', 'Pool queue is full');
     try {
       this.checkExpiry(quote);
       const trie = await nullifierInsertion(spent, inputs.nullifierHash);
@@ -313,6 +333,8 @@ export class Relayer implements RelayerApi {
         withdrawn: inputs.withdrawn, stateRoot: inputs.stateRoot, intent,
         nullifierProof: trie.proofCbor, newNullifierRoot: trie.newRoot });
       this.checkExpiry(quote);
+      // The ASP service can set a hold during the build without the lock.
+      if (!this.sequencer.canSubmit('settle')) return 'wait';
       return await this.sequencer.submit(signTx(tx.cbor, [this.seed]), { kind: 'settle', nullifier: inputs.nullifierHash });
     } catch (error) {
       if (error instanceof ApiError && error.code === 'quote_expired') throw error;
