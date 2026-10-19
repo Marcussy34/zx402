@@ -226,6 +226,16 @@ test('SEQ-04 an ambiguous submit stays pending and can confirm', async () => {
   assert.deepEqual(sequencer.pending(), []);
 });
 
+test('SEQ-04 an unknown outcome logs the provider diagnostic on one line', async () => {
+  const { chain, ctx } = setup();
+  const provider = providerWith(chain, { submit: async () => { throw new Error('socket hang up\nafter 30 s'); } });
+  const logs: string[] = [];
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, log: line => { logs.push(line); } });
+  const result = await submit(sequencer);
+  assert.equal(result.status, 'unknown');
+  assert.deepEqual(logs, [`Sequencer submit outcome unknown for ${result.txId}: socket hang up after 30 s`]);
+});
+
 test('SEQ-04 a rejected nonchild has no entry and does not reset', async () => {
   const { chain, ctx } = setup();
   const signed = await payment(ctx);

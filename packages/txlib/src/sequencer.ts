@@ -109,7 +109,13 @@ export class Sequencer {
       try { await this.provider.submit(signedCbor); break; }
       catch (error) {
         // A lost response may hide an accepted transaction. Keep its reservations.
-        if (!(error instanceof SubmitRejected)) { status = 'unknown'; break; }
+        if (!(error instanceof SubmitRejected)) {
+          status = 'unknown';
+          // The result carries no error, so this line is the operator's only copy of the provider diagnostic.
+          const message = error instanceof Error ? error.message : String(error);
+          this.log(`Sequencer submit outcome unknown for ${view.txId}: ${message.replace(/\s+/g, ' ')}`);
+          break;
+        }
         if (error.reason === 'bad_inputs' && child) {
           const remaining = deadline - performance.now();
           // Different backend nodes may learn the parent at different times.

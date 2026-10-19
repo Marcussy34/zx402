@@ -799,7 +799,8 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
     }
   });
   await t.test('REL-05: an unchanged pool is uncertain and exposes a safe submitted status', async () => {
-    const sequencer = new Sequencer({ ctx, status: chain });
+    // The node gives the relayer and the sequencer one operator log.
+    const sequencer = new Sequencer({ ctx, status: chain, log: line => logs.push({ message: line, error: undefined }) });
     const owner = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
       quoteTtlMs: 600_000, retryDelayMs: 5, now: () => now, log: (message, error) => logs.push({ message, error }) });
     const request = await freshRequest(requests[3]!, owner);
@@ -819,6 +820,7 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
       // The pool output stays reserved, so no other settle can spend it until a reconcile decides.
       assert.deepEqual(sequencer.pending().map(entry => entry.txId), [submitted.txHash], 'an unknown outcome stays pending in the sequencer');
       assert.equal(sequencer.canSubmit('settle'), false);
+      assert.ok(logs.some(entry => entry.message.includes('private provider diagnostic')), 'the operator log keeps the provider diagnostic');
     } finally { chain.submit = original; }
   });
   await t.test('REL-05: a competing insertion mined during recovery permits a rebuilt settle', async () => {
@@ -887,6 +889,26 @@ test('REL-02, REL-03, REL-04, REL-05, HTTP: real proof relayer story', {
       assert.deepEqual(chain.mempoolTxIds(), []);
       assert.deepEqual(await chain.getUtxosAt(request.intent.payouts[0]!.address), []);
     } finally { chain.submit = original; now = saved; }
+  });
+  await t.test('REL-05: three refused submits end internal, because nothing reached a mempool', async () => {
+    const sequencer = new Sequencer({ ctx, status: chain });
+    const owner = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
+      quoteTtlMs: 600_000, retryDelayMs: 5, now: () => now });
+    const request = await freshRequest(requests[3]!, owner);
+    const original = chain.submit;
+    let attempts = 0;
+    // The SDK releases the note on internal, so this is safe only after definite refusals.
+    chain.submit = async () => { attempts++; throw new SubmitRejected('private ledger refusal', 'other'); };
+    try {
+      await assert.rejects(owner.settle(request), error => error instanceof ApiError
+        && error.code === 'internal' && !error.message.includes('private ledger refusal'));
+      assert.equal(attempts, 3);
+      assert.deepEqual(sequencer.pending(), []);
+      assert.deepEqual(chain.mempoolTxIds(), []);
+      const status = await owner.getSettle(request.quoteId);
+      assert.equal(status.status, 'failed');
+      assert.equal(status.error, 'Could not build or submit the settle transaction');
+    } finally { chain.submit = original; }
   });
   await t.test('REL-05: two competing pool spends trigger two rebuilds and preserve the spend proof', async () => {
     const sequencer = new Sequencer({ ctx, status: chain });

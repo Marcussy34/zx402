@@ -11,12 +11,18 @@ import {
 import { verify } from '@zx402/prover';
 import {
   assetWireUnit, buildSettle, enterpriseAddress, isAdaAsset, keyHash, nullifierInsertion, readPool, signTx, slotToTime,
-  type ChainContext, type PoolState, type UtxoRef,
+  type ChainContext, type PoolState, type Sequencer, type SubmitResult,
 } from '@zx402/txlib';
 
 interface StoredQuote { quote: Quote; payouts: PayoutRequest[] }
-interface Submission { status: SettleStatus; nullifier: bigint; validUntil: number; sent: boolean }
-const sameRef = (a: UtxoRef, b: UtxoRef) => a.txId === b.txId && a.index === b.index;
+/** txHashes lists every transaction sent for this request, oldest first. A reset can rebuild it with a new hash. */
+interface Submission {
+  status: SettleStatus; nullifier: bigint; validUntil: number; sent: boolean; request: SettleRequest; txHashes: string[];
+}
+type Sent = Extract<SubmitResult, { status: 'accepted' | 'unknown' }>;
+/** The build failed or every submit was refused, so no version is in a mempool. The cause is already logged. */
+class NotSent extends Error {}
+const notSentMessage = 'Could not build or submit the settle transaction';
 
 function proofBytes(proof: ProofHex): CardanoProof {
   const bytes = (value: string, length: number) => {
@@ -47,6 +53,7 @@ function snarkjsProof(proof: CardanoProof): SnarkjsProof {
 
 export class Relayer implements RelayerApi {
   private readonly ctx: ChainContext;
+  private readonly sequencer: Sequencer;
   private readonly indexer: IndexerApi;
   private readonly seed: Uint8Array;
   private readonly vkey: SnarkjsVk;
@@ -64,10 +71,11 @@ export class Relayer implements RelayerApi {
   private readonly submissions = new Map<string, Submission>();
   private readonly inFlight = new Map<string, Promise<SettleStatus>>();
   private serial: Promise<unknown> = Promise.resolve();
-  private pendingPool: { ref: UtxoRef; validUntil: number } | undefined;
 
   constructor(a: {
     ctx: ChainContext; indexer: IndexerApi; seed: Uint8Array; vkey: SnarkjsVk;
+    /** Owns the pool output: every Settle builds on its head and submits through it. */
+    sequencer: Sequencer;
     /** The relayer fee is in pool asset units. */
     relayerFee?: bigint;
     payoutLovelace?: bigint; quoteTtlMs?: number; retryDelayMs?: number; now?: () => number;
@@ -75,6 +83,7 @@ export class Relayer implements RelayerApi {
     log?: (message: string, error?: unknown) => void;
   }) {
     this.ctx = a.ctx;
+    this.sequencer = a.sequencer;
     this.indexer = a.indexer;
     this.seed = a.seed.slice();
     this.vkey = a.vkey;
@@ -96,6 +105,14 @@ export class Relayer implements RelayerApi {
       || !Number.isSafeInteger(this.retryDelayMs) || this.retryDelayMs < 1) {
       throw new RangeError('Fees must be nonnegative and delays must be positive safe integers');
     }
+    // Listeners run while the caller of run or reconcile waits, so only enqueue rebuilds here.
+    this.sequencer.onReset(event => {
+      for (const entry of event.dropped) {
+        if (entry.kind !== 'settle') continue;
+        const job = this.serial.then(() => this.rebuild(entry.txId));
+        this.serial = job.catch(() => undefined);
+      }
+    });
   }
 
   getPool(): Promise<PoolView> { return this.indexer.getPool(); }
@@ -174,7 +191,8 @@ export class Relayer implements RelayerApi {
           this.quotes.delete(id);
           return { ...entry.status };
         }
-        return { ...entry.status, status: confirmed ? 'confirmed' : 'submitted', confirmations: confirmed ? 1 : 0 };
+        const txHash = confirmed ? await this.landedHash(entry) : entry.status.txHash;
+        return { ...entry.status, txHash, status: confirmed ? 'confirmed' : 'submitted', confirmations: confirmed ? 1 : 0 };
       } catch (error) {
         this.log('Could not read the settle transaction outcome', error);
         throw new ApiError('uncertain', 'Could not determine the settle transaction outcome');
@@ -190,7 +208,19 @@ export class Relayer implements RelayerApi {
     }
   }
 
-  private checkExpiry(quote: Quote): void {
+  /** The nullifier proves one version landed. Every version spends that nullifier, so only one can be in a block. */
+  private async landedHash(entry: Submission): Promise<string> {
+    try {
+      for (const hash of [...entry.txHashes].reverse()) {
+        if (await this.sequencer.transactionStatus(hash) === 'confirmed') return hash;
+      }
+    } catch (error) {
+      this.log('Could not read the status of a settle transaction', error);
+    }
+    return entry.status.txHash;
+  }
+
+  private checkExpiry(quote: { validUntil: number }): void {
     if (this.now() >= quote.validUntil) throw new ApiError('quote_expired', 'Quote has expired');
   }
 
@@ -212,17 +242,83 @@ export class Relayer implements RelayerApi {
     }
   }
 
-  private async availablePool(quote: Quote): Promise<PoolState> {
-    let pool = await readPool(this.ctx);
-    // Confirmed reads cannot spend our previous transaction's output until a block arrives.
-    while (this.pendingPool && sameRef(pool.utxo.ref, this.pendingPool.ref) && this.now() < this.pendingPool.validUntil) {
-      this.checkExpiry(quote);
-      await delay(this.retryDelayMs);
-      pool = await readPool(this.ctx);
+  /** Rebuilds one dropped Settle on the new head. Any failure leaves the submission for getSettle to decide. */
+  private async rebuild(txId: string): Promise<void> {
+    const entry = [...this.submissions.values()].find(submission => submission.sent && submission.txHashes.includes(txId));
+    // An expired quote is not rebuilt: getSettle fails it once the chain passes the deadline.
+    if (!entry || entry.status.status === 'failed' || this.now() >= entry.validUntil) return;
+    try {
+      // A reset can be wrong while the indexer lags, and the dropped version may have landed.
+      if ((await this.nullifiers()).includes(entry.nullifier)) return;
+      const sent = await this.send({ validUntil: entry.validUntil }, entry.request);
+      if (!entry.txHashes.includes(sent.txId)) entry.txHashes.push(sent.txId);
+      entry.status = { ...entry.status, txHash: sent.txId };
+    } catch (error) {
+      this.log('Could not rebuild the settle transaction', error);
     }
-    this.pendingPool = undefined;
-    this.checkExpiry(quote);
-    return pool;
+  }
+
+  /**
+   * Builds on the sequencer's head and submits, in up to three attempts. A refusal is definite,
+   * so the next attempt builds on the newer head. Throws NotSent when no attempt reached a mempool.
+   */
+  private async send(quote: { validUntil: number }, request: SettleRequest): Promise<Sent> {
+    const intent = this.intent(request.intent);
+    const proof = proofBytes(request.proof);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      this.checkExpiry(quote);
+      // Wait for room among the pending pool transactions. Each reconcile can confirm or reset them.
+      for (;;) {
+        await this.sequencer.reconcile();
+        if (this.sequencer.canSubmit('settle')) break;
+        this.checkExpiry(quote);
+        await delay(this.retryDelayMs);
+      }
+      const result = await this.sequencer.run(() => this.buildAndSubmit(quote, request.publicInputs, intent, proof));
+      if (result !== 'behind' && result.status !== 'rejected') return result;
+      if (result !== 'behind') this.log('The node refused the settle transaction', new Error(result.message));
+      // The next attempt reconciles first, so a confirmed or reset head is current again.
+      if (attempt < 2) await delay(this.retryDelayMs);
+      else if (result === 'behind') this.log(notSentMessage, new Error('Indexer nullifiers are behind the pool'));
+    }
+    throw new NotSent();
+  }
+
+  /** Runs under the sequencer's lock, so the head, the pending nullifiers and the submit stay consistent. */
+  private async buildAndSubmit(quote: { validUntil: number }, inputs: SettleRequest['publicInputs'], intent: SettleIntent,
+    proof: CardanoProof): Promise<SubmitResult | 'behind'> {
+    let pool: PoolState;
+    try { pool = await readPool(this.sequencer.ctx); }
+    catch (error) {
+      this.log('Could not read the pool', error);
+      throw new ApiError('internal', 'Could not read the pool');
+    }
+    const view = await this.getPool();
+    if (!view.roots.includes(inputs.stateRoot) || !pool.datum.roots.includes(inputs.stateRoot)) {
+      throw new ApiError('stale_root', 'State root is no longer in the pool history');
+    }
+    if (view.aspRoot !== inputs.aspRoot) throw new ApiError('stale_asp_root', 'ASP root has changed');
+    // The head's nullifier trie also holds the nullifiers of pending Settles.
+    const spent = [...await this.nullifiers(), ...this.sequencer.pendingNullifiers()];
+    if (spent.includes(inputs.nullifierHash)) throw new ApiError('nullifier_spent', 'Nullifier is already spent');
+    if (view.queue.length >= 8 || pool.datum.queue.length >= 8) throw new ApiError('queue_full', 'Pool queue is full');
+    try {
+      this.checkExpiry(quote);
+      const trie = await nullifierInsertion(spent, inputs.nullifierHash);
+      // The indexer can lag behind the head. Retry outside the lock.
+      if (trie.oldRoot !== pool.datum.nullifierRoot) return 'behind';
+      // In a token pool every payout output also gets payoutLovelace from this relayer's ADA.
+      const tx = await buildSettle(this.sequencer.ctx, { payer: { address: enterpriseAddress(this.seed, this.ctx.deployment.network) }, payoutLovelace: this.payoutLovelace,
+        pool, proof, nullifierHash: inputs.nullifierHash, newCommitment: inputs.newCommitment,
+        withdrawn: inputs.withdrawn, stateRoot: inputs.stateRoot, intent,
+        nullifierProof: trie.proofCbor, newNullifierRoot: trie.newRoot });
+      this.checkExpiry(quote);
+      return await this.sequencer.submit(signTx(tx.cbor, [this.seed]), { kind: 'settle', nullifier: inputs.nullifierHash });
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'quote_expired') throw error;
+      this.log(notSentMessage, error);
+      throw new NotSent();
+    }
   }
 
   private async submit(request: SettleRequest): Promise<SettleStatus> {
@@ -253,82 +349,26 @@ export class Relayer implements RelayerApi {
       this.quotes.delete(quote.quoteId);
       throw new ApiError('invalid_proof', 'Spend proof did not verify');
     }
-    let submitted: { status: SettleStatus; ref: UtxoRef } | undefined;
-    try {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        let pool: PoolState;
-        try { pool = await this.availablePool(quote); }
-        catch (error) {
-          if (error instanceof ApiError) throw error;
-          this.log('Could not read the pool', error);
-          throw new ApiError('internal', 'Could not read the pool');
-        }
-        const view = await this.getPool();
-        if (!view.roots.includes(inputs.stateRoot) || !pool.datum.roots.includes(inputs.stateRoot)) {
-          throw new ApiError('stale_root', 'State root is no longer in the pool history');
-        }
-        if (view.aspRoot !== inputs.aspRoot) throw new ApiError('stale_asp_root', 'ASP root has changed');
-        const spent = await this.nullifiers();
-        if (spent.includes(inputs.nullifierHash)) throw new ApiError('nullifier_spent', 'Nullifier is already spent');
-        if (view.queue.length >= 8 || pool.datum.queue.length >= 8) throw new ApiError('queue_full', 'Pool queue is full');
-        // The quote ID is also the tracking ID, including when submission throws.
-        const status: SettleStatus = { id: quote.quoteId, status: 'failed', txHash: '00'.repeat(32), confirmations: 0, error: null };
-        try {
-          this.checkExpiry(quote);
-          const trie = await nullifierInsertion(spent, inputs.nullifierHash);
-          if (trie.oldRoot !== pool.datum.nullifierRoot) {
-            if (attempt < 2) {
-              await delay(this.retryDelayMs);
-              continue;
-            }
-            throw new Error('Indexer nullifiers are behind the pool');
-          }
-          // In a token pool every payout output also gets payoutLovelace from this relayer's ADA.
-          const tx = await buildSettle(this.ctx, { payer: { address: enterpriseAddress(this.seed, this.ctx.deployment.network) }, payoutLovelace: this.payoutLovelace,
-            pool, proof: proof!, nullifierHash: inputs.nullifierHash, newCommitment: inputs.newCommitment,
-            withdrawn: inputs.withdrawn, stateRoot: inputs.stateRoot, intent,
-            nullifierProof: trie.proofCbor, newNullifierRoot: trie.newRoot });
-          status.txHash = tx.txId;
-          this.checkExpiry(quote);
-          const signed = signTx(tx.cbor, [this.seed]);
-          // A lost reply cannot prove rejection. Keep only the last transaction actually sent.
-          submitted = { status: { ...status, status: 'submitted' }, ref: pool.utxo.ref };
-          status.txHash = await this.ctx.provider.submit(signed);
-          status.status = 'submitted';
-          this.submissions.set(status.id, { status, nullifier: inputs.nullifierHash, validUntil: quote.validUntil, sent: true });
-          this.pendingPool = { ref: pool.utxo.ref, validUntil: quote.validUntil };
-          return { ...status };
-        } catch (error) {
-          if (error instanceof ApiError && error.code === 'quote_expired') throw error;
-          this.log('Could not build or submit the settle transaction', error);
-          let changed = false;
-          // A competing mempool transaction is invisible until the next confirmed block.
-          for (let read = 0; read < 3 && !changed; read++) {
-            if (read > 0) await delay(this.retryDelayMs);
-            this.checkExpiry(quote);
-            try { changed = !sameRef(pool.utxo.ref, (await readPool(this.ctx)).utxo.ref); }
-            catch (error) { this.log('Could not read the pool after a failed settle', error); }
-            this.checkExpiry(quote);
-          }
-          if (changed && attempt < 2) continue;
-          status.error = 'Could not build or submit the settle transaction';
-          this.submissions.set(status.id, { status, nullifier: inputs.nullifierHash, validUntil: quote.validUntil, sent: false });
-          throw new ApiError('internal', status.error);
-        }
-      }
-      throw new ApiError('internal', 'Settle retry limit reached');
-    } catch (error) {
-      if (!submitted) throw error;
-      this.log('Could not determine the settle transaction outcome', error);
-      const { status, ref } = submitted;
-      this.submissions.set(status.id, { status, nullifier: inputs.nullifierHash, validUntil: quote.validUntil, sent: true });
-      this.pendingPool = { ref, validUntil: quote.validUntil };
-      try {
-        if ((await this.nullifiers()).includes(inputs.nullifierHash)) return { ...status };
-      } catch (error) {
-        this.log('Could not read nullifiers after a settle submission', error);
-      }
-      throw new ApiError('uncertain', 'Could not determine the settle transaction outcome');
+    let sent: Sent;
+    try { sent = await this.send(quote, request); }
+    catch (error) {
+      if (!(error instanceof NotSent)) throw error;
+      // The quote ID is also the tracking ID. Nothing was sent, so a retry of this quote may build again.
+      this.submissions.set(quote.quoteId, { status: { id: quote.quoteId, status: 'failed', txHash: '00'.repeat(32), confirmations: 0,
+        error: notSentMessage }, nullifier: inputs.nullifierHash, validUntil: quote.validUntil, sent: false, request, txHashes: [] });
+      throw new ApiError('internal', notSentMessage);
     }
+    const status: SettleStatus = { id: quote.quoteId, status: 'submitted', txHash: sent.txId, confirmations: 0, error: null };
+    this.submissions.set(status.id, { status, nullifier: inputs.nullifierHash, validUntil: quote.validUntil, sent: true,
+      request, txHashes: [sent.txId] });
+    if (sent.status === 'accepted') return { ...status };
+    // A lost reply cannot prove rejection. The sequencer keeps the transaction pending, and reconciling decides.
+    this.log('Could not determine the settle transaction outcome');
+    try {
+      if ((await this.nullifiers()).includes(inputs.nullifierHash)) return { ...status };
+    } catch (error) {
+      this.log('Could not read nullifiers after a settle submission', error);
+    }
+    throw new ApiError('uncertain', 'Could not determine the settle transaction outcome');
   }
 }
