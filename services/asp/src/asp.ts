@@ -131,14 +131,23 @@ export class AspService {
     const root = this.approvedRoot;
     if (root === current.datum.root) return { approved, txId: null };
     // A pending Settle uses the current ASP output, so the update waits for a block.
-    if (!sequencer.canSubmit('asp')) return { approved, txId: null };
+    if (!sequencer.canSubmit('asp')) {
+      // Under steady traffic a Settle may always be pending, so the update asks the
+      // sequencer to stop admitting new Settles until this one is submitted.
+      sequencer.holdForAsp();
+      return { approved, txId: null };
+    }
     const signers = [...new Set(operatorSeeds.map(seed => hex(keyHash(seed))))];
     if (signers.filter(signer => current.datum.operators.includes(signer)).length < current.datum.threshold) {
       throw new Error('Operator signatures do not satisfy the ASP threshold');
     }
     return sequencer.run(async () => {
       // A run queued ahead of this one may have submitted a Settle.
-      if (!sequencer.canSubmit('asp')) return { approved, txId: null };
+      if (!sequencer.canSubmit('asp')) {
+        // The same hold applies after a queued Settle won the lock.
+        sequencer.holdForAsp();
+        return { approved, txId: null };
+      }
       const tx = await buildAspUpdate(sequencer.ctx, { root, signers,
         payer: { address: enterpriseAddress(payerSeed, ctx.deployment.network) } });
       if (!decodeTx(tx.cbor).inputs.some(ref => `${ref.txId}#${ref.index}` === input)) throw new Error('ASP state changed while building the update');

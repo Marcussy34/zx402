@@ -242,6 +242,44 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
     assert.deepEqual(await readAsp(ctx), before);
   });
 
+  await t.test('REL-10 a waiting ASP update holds new settles', async () => {
+    const held = new Sequencer({ ctx, status: chain, maxPending: 2 });
+    const aspTree = MerkleTree.fromLeaves(service.leaves());
+    const user = keys.users.findIndex(seed => hex(keyHash(seed)) === plan.deposits[1]!.datum.refund);
+    const note: Note = { ...secrets[user]!, ...plan.credited[1]! };
+    const intent = { poolId: Buffer.from(ctx.deployment.poolId, 'hex'), relayer: keyHash(keys.relayer),
+      payouts: [{ address: { payment: { kind: 'key' as const, hash: keyHash(keys.users[0]!) }, stake: null },
+        amount: 1_000_000n, datumHash: null }],
+      validUntil: BigInt((await chain.getTip()).time + 300_000) };
+    const fresh = deriveNoteSecrets(keys.users[user]!, 1);
+    const spend = spendWitness({ note, stateTree: witness.tree, stateIndex: 1, aspTree, aspIndex: 1,
+      withdrawn: 1_000_000n, newNullifier: fresh.nullifier, newSecret: fresh.secret, context: contextFor(intent) });
+    const spendProof = await prove(await loadDevArtifacts('spend', repoRoot), spend.input);
+    const trie = await nullifierInsertion([], spend.public.nullifierHash);
+    const settle = await held.run(async () => {
+      const pool = await readPool(held.ctx);
+      const tx = await buildSettle(held.ctx, { payer: payer(keys.relayer), pool, proof: spendProof.cardano,
+        ...spend.public, withdrawn: 1_000_000n, intent, nullifierProof: trie.proofCbor, newNullifierRoot: trie.newRoot });
+      return held.submit(signTx(tx.cbor, [keys.relayer]), { kind: 'settle', nullifier: spend.public.nullifierHash });
+    });
+    assert.equal(settle.status, 'accepted');
+    // maxPending 2 leaves room for another Settle.
+    assert.equal(held.canSubmit('settle'), true);
+    // An approved label that is not yet published gives the service a new root.
+    const waitingPath = join(directory, 'waiting.json');
+    writeFileSync(waitingPath, JSON.stringify({ version: 1, poolId: ctx.deployment.poolId,
+      leaves: ['0', String(labels[1]), '7'], removed: [] }));
+    const waiting = new AspService({ ...options, sequencer: held, storePath: waitingPath, deny: () => true });
+    assert.deepEqual(await waiting.tick(), { approved: 0, txId: null });
+    assert.deepEqual(chain.mempoolTxIds(), [settle.txId]);
+    // The waiting update stops the sequencer admitting new Settles.
+    assert.equal(held.canSubmit('settle'), false);
+    // Drop the Settle so the next test builds on the same confirmed head.
+    assert.deepEqual(chain.dropTransaction(settle.txId), [settle.txId]);
+    assert.equal(await held.reconcile(), null);
+    assert.equal((await held.reconcile())?.reason, 'dropped');
+  });
+
   await t.test('REL-10: the ASP gate waits for a pending Settle', async () => {
     const aspTree = MerkleTree.fromLeaves(service.leaves());
     const user = keys.users.findIndex(seed => hex(keyHash(seed)) === plan.deposits[1]!.datum.refund);

@@ -23,8 +23,11 @@ export class Sequencer {
   private readonly childRetryMs: number;
   private readonly childRetryForMs: number;
   private readonly unseenLimit: number;
+  private readonly aspHoldMs: number;
+  private readonly now: () => number;
   private readonly log: (line: string) => void;
   private entries: PendingEntry[] = [];
+  private holdUntil = 0;
   private lock: Promise<void> = Promise.resolve();
   private resets: ResetEvent[] = [];
   private readonly listeners: ((event: ResetEvent) => void | Promise<void>)[] = [];
@@ -32,6 +35,7 @@ export class Sequencer {
   constructor(a: {
     ctx: ChainContext; status: TxStatusReader; maxPending?: number;
     childRetryMs?: number; childRetryForMs?: number; unseenLimit?: number;
+    aspHoldMs?: number; now?: () => number;
     log?: (line: string) => void;
   }) {
     this.maxPending = a.maxPending ?? 1;
@@ -39,6 +43,11 @@ export class Sequencer {
     if (!Number.isInteger(this.maxPending) || this.maxPending < 1 || this.maxPending > 8) {
       throw new RangeError('maxPending must be an integer from 1 to 8');
     }
+    this.aspHoldMs = a.aspHoldMs ?? 120_000;
+    if (!Number.isSafeInteger(this.aspHoldMs) || this.aspHoldMs <= 0) {
+      throw new RangeError('aspHoldMs must be a positive safe integer');
+    }
+    this.now = a.now ?? Date.now;
     this.provider = a.ctx.provider;
     this.status = a.status;
     this.childRetryMs = a.childRetryMs ?? 2000;
@@ -70,6 +79,13 @@ export class Sequencer {
 
   run<T>(fn: () => Promise<T>): Promise<T> { return this.withLock(fn); }
 
+  /** Ask the sequencer to stop admitting Settles until an ASP update is submitted. */
+  holdForAsp(): void {
+    // An update already in flight already blocks Settles.
+    if (this.entries.some(entry => entry.kind === 'asp')) return;
+    this.holdUntil = this.now() + this.aspHoldMs;
+  }
+
   canSubmit(kind: PoolTxKind): boolean {
     const settle = this.entries.some(entry => entry.kind === 'settle');
     const insert = this.entries.some(entry => entry.kind === 'insert');
@@ -78,7 +94,8 @@ export class Sequencer {
     // ASP updates and Settles cannot race over the ASP reference output.
     if (kind === 'asp') return !asp && !settle;
     if (kind === 'insert') return count < this.maxPending && !insert;
-    return count < this.maxPending && !asp;
+    // A waiting ASP update reserves Settle capacity, so approvals cannot starve.
+    return count < this.maxPending && !asp && this.now() >= this.holdUntil;
   }
 
   /** Call inside run: submission shares the build's lock and must not acquire it again. */
@@ -105,6 +122,8 @@ export class Sequencer {
     this.entries.push({ kind: meta.kind, txId: view.txId, nullifier: meta.nullifier ?? null,
       // An absent upper bound must never trigger expiry.
       invalidHereafter: view.invalidHereafter ?? Infinity, spent: view.inputs, outputs: outputsOf(view), unseen: 0 });
+    // The update is submitted, so the hold has done its job.
+    if (meta.kind === 'asp') this.holdUntil = 0;
     return { status, txId: view.txId };
   }
 

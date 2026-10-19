@@ -285,6 +285,25 @@ Behavior:
 
 ---
 
+### Task 5b: A waiting ASP update holds new Settles
+
+**Files:**
+- Modify: `packages/txlib/src/sequencer.ts`, `services/asp/src/asp.ts`
+- Test: `packages/txlib/test/sequencer.test.ts`, `services/asp/test/asp.test.ts`
+
+**Interfaces:**
+- Produces: `Sequencer` constructor options `aspHoldMs?: number` (default 120,000) and `now?: () => number` (default `Date.now`), and the method `holdForAsp(): void`.
+- While a hold is active, `canSubmit('settle')` is false. A hold ends when an `asp` entry is submitted (`accepted` or `unknown`), or when `aspHoldMs` has passed since the last `holdForAsp()` call.
+- `AspService.update()` calls `sequencer.holdForAsp()` when it has a new root to publish but `canSubmit('asp')` is false.
+
+- [ ] **Step 1: Write the failing tests.** `SEQ-07 a held sequencer admits no new settle until the ASP update is submitted` (with `maxPending: 2` and one Settle pending, after `holdForAsp()` `canSubmit('settle')` is false; after an `asp` submit it stays false only because the ASP update is pending, and after it confirms and `reconcile()`, it is true). `SEQ-07 a hold expires after aspHoldMs` (injected `now`). `REL-10 a waiting ASP update holds new settles` in `asp.test.ts`.
+- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the txlib and ASP suites.** Expected: PASS.
+- [ ] **Step 5: Commit.** `git commit -m "sequencer, asp: a waiting ASP update holds new settles, so approvals cannot starve"`
+
+---
+
 ### Task 6: The node wires one sequencer
 
 **Files:**

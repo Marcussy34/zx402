@@ -222,13 +222,14 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | REL-04 | A stale state root or ASP root returns the matching error code |
 | REL-05 | When another party spends the pool UTXO first, the relayer rebuilds and submits again |
 | REL-06 | Two settles chain inside one block window |
-| REL-10 | The ASP gate: no ASP update while a Settle is pending, and no Settle while an ASP update is pending |
+| REL-10 | The ASP gate: no ASP update while a Settle is pending, no Settle while an ASP update is pending, and a waiting ASP update holds new Settles |
 | SEQ-01 | The sequencer overlay shows pending outputs and hides pending spends |
 | SEQ-02 | A child chains on a pending output and both land in one block; the gates follow `maxPending` and the transaction kinds |
 | SEQ-03 | A dropped parent, a foreign spend, or an expired entry resets the chain, and reset listeners run after the lock is released |
 | SEQ-04 | One unknown read does not reset; a child refused with `BadInputsUTxO` is retried; an unknown submit outcome stays pending |
 | SEQ-05 | A throw inside `run` leaves the pending list unchanged |
 | SEQ-06 | `reconcile` waits for `run`, and queued work keeps FIFO order |
+| SEQ-07 | A waiting ASP update holds new Settles until it is submitted, and the hold expires after `aspHoldMs` |
 | SDK-01 | All notes are recovered from the seed plus indexer data |
 | SDK-02 | Sync downloads leaves in pages and never sends a commitment to the server |
 | SDK-03 | `settlePrivately` proves locally and never sends a secret |

@@ -338,3 +338,52 @@ test('SEQ-06 queued runs keep FIFO order after a callback throws', async () => {
   await Promise.all([rejected, second, third]);
   assert.deepEqual(order, [2, 3]);
 });
+
+test('SEQ-07 a held sequencer admits no new settle until the ASP update is submitted', async () => {
+  const { chain, ctx } = setup();
+  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2 });
+  await submit(sequencer, 0, 1, 'settle', 11n);
+  // maxPending 2 leaves room for another Settle.
+  assert.equal(sequencer.canSubmit('settle'), true);
+  sequencer.holdForAsp();
+  assert.equal(sequencer.canSubmit('settle'), false);
+  // A hold only stops Settles.
+  assert.equal(sequencer.canSubmit('insert'), true);
+  // The held Settle confirms, so the ASP update is now free to go.
+  chain.mineBlock();
+  assert.equal(await sequencer.reconcile(), null);
+  assert.equal(sequencer.canSubmit('asp'), true);
+  const update = await submit(sequencer, 1, 2, 'asp');
+  assert.equal(update.status, 'accepted');
+  // The ASP entry itself blocks Settles until it confirms.
+  assert.equal(sequencer.canSubmit('settle'), false);
+  chain.mineBlock();
+  assert.equal(await sequencer.reconcile(), null);
+  assert.equal(sequencer.canSubmit('settle'), true);
+});
+
+test('SEQ-07 a hold expires after aspHoldMs', () => {
+  const { chain, ctx } = setup();
+  let now = 1_000;
+  const sequencer = new Sequencer({ ctx, status: chain, aspHoldMs: 5_000, now: () => now });
+  sequencer.holdForAsp();
+  assert.equal(sequencer.canSubmit('settle'), false);
+  now += 4_999;
+  assert.equal(sequencer.canSubmit('settle'), false);
+  now += 1;
+  assert.equal(sequencer.canSubmit('settle'), true);
+});
+
+test('SEQ-07 aspHoldMs must be a positive safe integer, and defaults to 120000', () => {
+  const { chain, ctx } = setup();
+  for (const aspHoldMs of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new Sequencer({ ctx, status: chain, aspHoldMs }), RangeError);
+  }
+  let now = 0;
+  const sequencer = new Sequencer({ ctx, status: chain, now: () => now });
+  sequencer.holdForAsp();
+  now = 119_999;
+  assert.equal(sequencer.canSubmit('settle'), false);
+  now = 120_000;
+  assert.equal(sequencer.canSubmit('settle'), true);
+});
