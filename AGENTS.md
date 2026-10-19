@@ -78,7 +78,7 @@ Four lessons from the live runs. The local test chain in `packages/txlib/src/tes
 - Mesh 1.9.1 hashes script data with old built-in cost models. Always build through `newTxBuilder` in `packages/txlib/src/context.ts`, which sets the live cost models.
 - The live evaluator refuses a confirmed output that is sent as an extra input. `complete` sends only outputs that are not on chain yet.
 - Reads return confirmed data only. After a submit, wait for the confirmation before you build on its outputs, or build through the sequencer (`packages/txlib/src/sequencer.ts`), which tracks pending outputs.
-- Mesh 1.9.1 `evaluateTx` drops the datum of every additional UTXO and nests its tokens in the wrong shape. Evaluation with additional UTXOs goes through `ogmiosAdditionalUtxo` in `packages/txlib/src/providers/blockfrost.ts`, which posts the Ogmios v5 body itself. The FakeChain cannot catch this, because it evaluates full UTXOs.
+- Mesh 1.9.1 `evaluateTx` drops the datum of every additional UTXO, so a chained script input fails with an empty `ScriptFailures`. Evaluation with additional UTXOs goes through `ogmiosAdditionalUtxo` in `packages/txlib/src/providers/blockfrost.ts`, which posts the body itself. Blockfrost reads tokens nested by policy, not the dotted keys of the Ogmios v5.6 schema. The FakeChain cannot catch this, because it evaluates full UTXOs.
 
 Never call Mesh `applyParamsToScript`. Mesh 1.9.1 cuts every byte string over 64 bytes down to 64 bytes and reports no error.
 That corrupts the 96-byte points of a verification key. Use `buildScripts` in `packages/txlib/src/scripts.ts`, which matches `aiken blueprint apply` byte for byte.

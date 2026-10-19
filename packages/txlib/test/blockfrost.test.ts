@@ -205,7 +205,8 @@ test('REL-06 provider: evaluation without additional UTXOs returns every redeeme
   assert.deepEqual(calls, [['cafe', []], ['beef', []]]);
 });
 
-test('TX-16 evaluate sends additional UTXOs in the Ogmios v5 shape', async () => {
+// Blockfrost's Ogmios refuses the dotted assets keys of the Ogmios v5.6 schema and reads tokens nested by policy.
+test('TX-16 evaluate sends additional UTXOs in the shape Blockfrost decodes', async () => {
   let body: { cbor?: string; additionalUtxoSet?: unknown[] } | undefined;
   const provider = providerFromMesh(fake({ post: async (path, sent) => {
     assert.equal(path, 'utils/txs/evaluate/utxos');
@@ -218,17 +219,17 @@ test('TX-16 evaluate sends additional UTXOs in the Ogmios v5 shape', async () =>
     { txId, index: 4 },
     {
       address,
-      value: { coins: 6_000_000, assets: { [`${policy}.${assetName}`]: 10 } },
+      value: { coins: 6_000_000, [policy]: { [assetName]: 10 } },
       datum: 'd8799f0102ff',
     },
   ]);
 });
 
-test('TX-16 an empty asset name is the bare policy id', () => {
+test('TX-16 an empty asset name nests under an empty key', () => {
   const [, output] = ogmiosAdditionalUtxo({
     ...chained, value: { lovelace: 2_000_000n, assets: { [policy]: 1n } }, inlineDatum: null,
   });
-  assert.deepEqual(output.value, { coins: 2_000_000, assets: { [policy]: 1 } });
+  assert.deepEqual(output.value, { coins: 2_000_000, [policy]: { '': 1 } });
 });
 
 test('TX-16 a reference script in an additional UTXO throws instead of being dropped', () => {

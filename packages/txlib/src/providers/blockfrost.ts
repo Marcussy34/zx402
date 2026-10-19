@@ -71,12 +71,13 @@ export function utxoToMesh(u: Utxo): UTxO {
   };
 }
 
-/** One additional UTXO as the input and output pair in Ogmios v5 JSON. */
+/** One additional UTXO as the input and output pair Blockfrost's Ogmios evaluates. */
 export type OgmiosAdditionalUtxo = [
   { txId: string; index: number },
   {
     address: string;
-    value: { coins: number; assets?: Record<string, number> };
+    // Tokens nest by policy ID, then asset name, next to coins.
+    value: { coins: number } & Record<string, number | Record<string, number>>;
     datumHash?: string;
     datum?: string;
   },
@@ -91,26 +92,25 @@ function ogmiosQuantity(quantity: bigint, unit: string): number {
 }
 
 /**
- * Converts a UTXO to the Ogmios v5 shape Blockfrost evaluates.
- * Mesh 1.9.1 drops datums and nests assets by policy, so adapters send this body themselves.
+ * Converts a UTXO to the shape Blockfrost's Ogmios evaluates.
+ * Mesh 1.9.1 drops the datum, so the adapter sends this body itself. Probed on Preprod on 2026-10-19:
+ * Blockfrost refuses the dotted `assets` keys of the Ogmios v5.6 schema and reads tokens nested by policy.
  */
 export function ogmiosAdditionalUtxo(u: Utxo): OgmiosAdditionalUtxo {
   // A dropped reference script would change the evaluation result, so refuse it loudly.
   if (u.scriptRef !== null) throw new Error('A reference script in an additional UTXO cannot be evaluated');
-  const assets: Record<string, number> = {};
+  const value: OgmiosAdditionalUtxo[1]['value'] = { coins: ogmiosQuantity(u.value.lovelace, 'lovelace') };
   for (const [unit, quantity] of Object.entries(u.value.assets)) {
     // A unit is the 56-character policy ID followed by the asset name, which may be empty.
     const policy = unit.slice(0, 56), name = unit.slice(56);
-    assets[name ? `${policy}.${name}` : policy] = ogmiosQuantity(quantity, unit);
+    const names = (value[policy] ??= {}) as Record<string, number>;
+    names[name] = ogmiosQuantity(quantity, unit);
   }
   return [
     { txId: u.ref.txId, index: u.ref.index },
     {
       address: u.address,
-      value: {
-        coins: ogmiosQuantity(u.value.lovelace, 'lovelace'),
-        ...(Object.keys(assets).length === 0 ? {} : { assets }),
-      },
+      value,
       ...(u.inlineDatum === null ? {} : { datum: u.inlineDatum }),
       ...(u.datumHash === null ? {} : { datumHash: u.datumHash }),
     },
@@ -282,7 +282,7 @@ function adapt(mesh: MeshProviderLike, projectId: string): Provider & TxStatusRe
           return { tag, index: action.index, mem: BigInt(action.budget.mem), steps: BigInt(action.budget.steps) };
         });
       }
-      // Mesh 1.9.1 sends an incomplete additional UTXO set, so post the Ogmios v5 body directly.
+      // Mesh 1.9.1 drops the datum of each additional UTXO, so post the body directly.
       const body = await mesh.post('utils/txs/evaluate/utxos', {
         cbor: txCbor, additionalUtxoSet: additionalUtxos.map(ogmiosAdditionalUtxo),
       });
