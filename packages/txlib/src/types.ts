@@ -91,6 +91,26 @@ export interface Provider {
   submit(txCbor: string): Promise<string>;
 }
 
+/** Pending in a mempool, in a block, or not found. */
+export type TxStatus = 'mempool' | 'confirmed' | 'unknown';
+
+/** Reads the node's view of one transaction. */
+export interface TxStatusReader { transactionStatus(txId: string): Promise<TxStatus> }
+
+/**
+ * The node refused the transaction, so it is in no mempool we sent it to.
+ * Any other submit error means the outcome is unknown.
+ */
+export class SubmitRejected extends Error {
+  readonly reason: 'bad_inputs' | 'other';
+
+  constructor(message: string, reason: 'bad_inputs' | 'other') {
+    super(message);
+    this.name = 'SubmitRejected';
+    this.reason = reason;
+  }
+}
+
 /** Builders return unsigned transactions unless they explicitly say otherwise. */
 export interface BuiltTx { cbor: string; txId: string; fee: bigint; size: number; exUnits: RedeemerUnits[] }
 

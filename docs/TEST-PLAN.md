@@ -200,6 +200,8 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | TX-07 | CollectFees, config update, and ASP update build and evaluate |
 | TX-08 | No pool transaction contains a mint, a withdrawal, or a certificate |
 | TX-09 | The stealth leg-2 payment has one input, one output, and a fee equal to input minus price |
+| TX-12 | The FakeChain mines part of its mempool and drops a transaction with its descendants |
+| TX-13 | The FakeChain reports a transaction as in the mempool, confirmed, or unknown, and a spent input is a `SubmitRejected` with reason `bad_inputs` |
 
 ## 11. Services and SDK
 
@@ -217,6 +219,12 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | REL-04 | A stale state root or ASP root returns the matching error code |
 | REL-05 | When another party spends the pool UTXO first, the relayer rebuilds and submits again |
 | REL-06 | Two settles chain inside one block window |
+| SEQ-01 | The sequencer overlay shows pending outputs and hides pending spends |
+| SEQ-02 | A child chains on a pending output and both land in one block; the gates follow `maxPending` and the transaction kinds |
+| SEQ-03 | A dropped parent, a foreign spend, or an expired entry resets the chain, and reset listeners run after the lock is released |
+| SEQ-04 | One unknown read does not reset; a child refused with `BadInputsUTxO` is retried; an unknown submit outcome stays pending |
+| SEQ-05 | A throw inside `run` leaves the pending list unchanged |
+| SEQ-06 | `reconcile` waits for `run`, and queued work keeps FIFO order |
 | SDK-01 | All notes are recovered from the seed plus indexer data |
 | SDK-02 | Sync downloads leaves in pages and never sends a commitment to the server |
 | SDK-03 | `settlePrivately` proves locally and never sends a secret |
@@ -225,6 +233,7 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | SDK-06 | The SDK proves again after `stale_root` or `stale_asp_root` |
 | SDK-07 | The SDK rejects a payout below the minimum ADA and a pointer address before proving |
 | SDK-08 | The SDK spends the larger note when two notes share a nullifier |
+| SDK-09 | The stealth signer finds its funding output by address and value, so a Settle rebuilt under a new hash still pays |
 | MON-01 | The solvency monitor raises an alert when a fake discrepancy is injected |
 
 ## 12. End to end on mainnet (`E2E`)

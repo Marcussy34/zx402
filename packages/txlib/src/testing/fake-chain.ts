@@ -5,8 +5,9 @@ import type { ChainHistory, TxRecord } from '../history.js';
 import { verifyWitnesses } from '../keys.js';
 import { decodeTx, outputsOf, type TxView } from '../txview.js';
 import {
-  PARAMETERS, ScriptFailure, minFee, slotToTime, type ChainTip, type Network,
-  type ProtocolParameters, type Provider, type RedeemerUnits, type Utxo, type UtxoRef, type Value,
+  PARAMETERS, ScriptFailure, SubmitRejected, minFee, slotToTime, type ChainTip, type Network,
+  type ProtocolParameters, type Provider, type RedeemerUnits, type TxStatus, type TxStatusReader,
+  type Utxo, type UtxoRef, type Value,
 } from '../types.js';
 import { simulate } from './simulate.js';
 
@@ -17,11 +18,11 @@ export type LedgerRule =
   | 'script_integrity' | 'script_failure' | 'insufficient_collateral' | 'unsupported';
 
 /** A transaction broke one of the fake chain's supported ledger rules. */
-export class LedgerError extends Error {
+export class LedgerError extends SubmitRejected {
   readonly rule: LedgerRule;
 
   constructor(rule: LedgerRule, message: string = rule) {
-    super(message);
+    super(message, rule === 'missing_input' ? 'bad_inputs' : 'other');
     this.name = 'LedgerError';
     this.rule = rule;
   }
@@ -92,7 +93,7 @@ function checkScriptIntegrity(tx: Transaction, resolved: Utxo[], usedHashes: str
 }
 
 /** A deterministic test chain for the transaction rules used by M0, not a complete Cardano ledger. */
-export class FakeChain implements Provider, ChainHistory {
+export class FakeChain implements Provider, ChainHistory, TxStatusReader {
   private readonly network: Network;
   private readonly parameters: ProtocolParameters;
   private slot: number;
@@ -273,18 +274,44 @@ export class FakeChain implements Provider, ChainHistory {
     });
   }
 
-  mineBlock(slots = 20): FakeBlock {
+  /** Mine up to `limit` mempool transactions in submit order. The rest stay pending. */
+  mineBlock(slots = 20, options: { limit?: number } = {}): FakeBlock {
+    // Check the limit before advanceSlots so a bad value leaves the chain untouched.
+    if (options.limit !== undefined) nonnegativeInteger(options.limit);
     const previousSlot = this.slot;
     this.advanceSlots(slots);
-    const transactions = this.mempool;
+    const count = options.limit ?? this.mempool.length;
+    const transactions = this.mempool.slice(0, count);
     const height = this.history.length + 1;
     const txIds = transactions.map(tx => tx.view.txId);
     const previousHash = this.history.at(-1)?.block.hash ?? genesisHash;
     const block = { height, slot: this.slot, hash: hash(JSON.stringify([previousHash, height, this.slot, txIds])), txIds };
     this.history.push({ block, transactions, before: new Map(this.confirmed), previousSlot });
     for (const tx of transactions) apply(this.confirmed, tx.view);
-    this.mempool = [];
+    this.mempool = this.mempool.slice(count);
     return structuredClone(block);
+  }
+
+  /** Pending transaction IDs, in submit order. */
+  mempoolTxIds(): string[] { return this.mempool.map(tx => tx.view.txId); }
+
+  /**
+   * Remove a pending transaction and its descendants, and return their IDs, parent first.
+   * A descendant spends, references, or uses as collateral an output of a removed transaction.
+   */
+  dropTransaction(txId: string): string[] {
+    if (!this.mempool.some(tx => tx.view.txId === txId)) throw new Error(`Unknown mempool transaction: ${txId}`);
+    const removed = new Set<string>();
+    const dropped: string[] = [];
+    // Mempool order is submit order, so a parent is always seen before its children.
+    this.mempool = this.mempool.filter(tx => {
+      const refs = [...tx.view.inputs, ...tx.view.referenceInputs, ...tx.view.collateral];
+      if (tx.view.txId !== txId && !refs.some(ref => removed.has(refKey(ref)))) return true;
+      dropped.push(tx.view.txId);
+      for (const output of outputsOf(tx.view)) removed.add(refKey(output.ref));
+      return false;
+    });
+    return dropped;
   }
 
   advanceSlots(slots: number): void {
@@ -307,6 +334,14 @@ export class FakeChain implements Provider, ChainHistory {
   }
 
   blocks(): FakeBlock[] { return this.history.map(state => structuredClone(state.block)); }
+
+  /** Pending in the mempool, confirmed in a block, or unknown after a rollback. */
+  async transactionStatus(txId: string): Promise<TxStatus> {
+    if (this.mempool.some(tx => tx.view.txId === txId)) return 'mempool';
+    // Read the stored transactions directly. blocks() and transaction() clone.
+    return this.history.some(({ transactions }) => transactions.some(tx => tx.view.txId === txId))
+      ? 'confirmed' : 'unknown';
+  }
 
   transaction(txId: string): { cbor: string; block: FakeBlock | null } | undefined {
     const pending = this.mempool.find(tx => tx.view.txId === txId);

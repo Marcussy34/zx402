@@ -51,10 +51,12 @@ export function stealthSigner(h: Hooks): ClientCardanoSigner {
         // Save before funding so a crash or a lost response cannot reuse this address.
         await h.advance();
         reserved = true;
-        const receipt = await h.settle({ payouts: [{ address, amount: payoutAmount }],
+        await h.settle({ payouts: [{ address, amount: payoutAmount }],
           ...(adaPool ? {} : { minPayoutLovelace: need }) });
+        // A relayer reset can rebuild the Settle with a new hash. Each one-time address
+        // is funded once, so address and value identify the funding output.
         const utxo = await h.poll(async () => (await h.ctx.provider.getUtxosAt(address)).find(u =>
-          u.ref.txId === receipt.txHash && u.address === address
+          u.address === address
           && (adaPool ? u.value.lovelace === payoutAmount && Object.keys(u.value.assets).length === 0
             : u.value.lovelace >= need && u.value.assets[assetUnit(asset)] === price && Object.keys(u.value.assets).length === 1)
           && u.inlineDatum === null && u.datumHash === null && u.scriptRef === null),

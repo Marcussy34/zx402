@@ -9,6 +9,7 @@ export * from './scripts.js';
 export * from './providers/blockfrost.js';
 export * from './stealth.js';
 export * from './context.js';
+export * from './sequencer.js';
 export * from './init.js';
 export * from './deposit.js';
 export * from './nullifiers.js';

@@ -60,7 +60,7 @@
   - `TX-13 transactionStatus follows a transaction`: `'unknown'` before submit, `'mempool'` after, `'confirmed'` after `mineBlock()`, `'unknown'` after `rollback(1)`.
   - `TX-13 a spent input is a SubmitRejected with reason bad_inputs`: submit a transaction whose input was already spent. Assert the error is `instanceof SubmitRejected`, `instanceof LedgerError`, `rule === 'missing_input'` and `reason === 'bad_inputs'`.
 - [ ] **Step 2: Run them and see them fail**
-  Run: `npm test -w packages/txlib -- --test-name-pattern "TX-1[23]"`
+  Run: `cd packages/txlib && node --import tsx --test --test-name-pattern "TX-1[23]" "test/**/*.test.ts"`
   Expected: FAIL, the new methods and types do not exist.
 - [ ] **Step 3: Implement** the types and methods listed under Interfaces.
 - [ ] **Step 4: Run the whole txlib suite**
@@ -92,7 +92,7 @@
   - `TX-14 transactionStatus reads the chain, then the mempool`: fake `get` answers for `txs/` and `mempool/` give `'confirmed'`, `'mempool'` and `'unknown'` in the three cases.
   - `TX-15 Insert and ASP updates carry a deadline`: build each on the devnet with `validForMs: 120_000`. Assert `decodeTx(tx.cbor).invalidHereafter === timeToSlot(tip.time + 120_000, network)`. Build again without the option and assert the default of 600,000 ms.
 - [ ] **Step 2: Run them and see them fail**
-  Run: `npm test -w packages/txlib -- --test-name-pattern "TX-1[45]"`
+  Run: `cd packages/txlib && node --import tsx --test --test-name-pattern "TX-1[45]" "test/**/*.test.ts"`
   Expected: FAIL.
 - [ ] **Step 3: Implement** the three changes. In Blockfrost, reuse `errorPayload` and the existing status checks to detect HTTP 400. `transactionStatus` uses `mesh.get` like `getTransactionCbor` does.
 - [ ] **Step 4: Run the txlib suite**
@@ -180,7 +180,7 @@ Rules the code must follow (design sections 5.2 to 5.7):
   - `SEQ-05 a throw inside run leaves pending unchanged`: one entry pending. `run(async () => { throw new Error('no fee input') })` rejects, and `pending()` deep-equals the list from before.
   - `SEQ-06 reconcile waits for run`: start `run` with a function that waits on a promise you control. Call `reconcile()`. Assert it has not resolved. Release the promise. Assert the order is run end, then reconcile end.
 - [ ] **Step 2: Run them and see them fail**
-  Run: `npm test -w packages/txlib -- --test-name-pattern "SEQ-"`
+  Run: `cd packages/txlib && node --import tsx --test --test-name-pattern "SEQ-" "test/**/*.test.ts"`
   Expected: FAIL, `Sequencer` is not exported.
 - [ ] **Step 3: Implement** `packages/txlib/src/sequencer.ts` and the export.
 - [ ] **Step 4: Run the txlib suite**
@@ -305,7 +305,7 @@ Behavior:
 
 - [ ] **Step 1: Write the failing test** `E2E-18 the node chains two private payments in one block` in `ops/test/rehearsal.test.ts`. Use `maxPending: 2`, two SDK instances with funded notes, and two `settle` calls started together, with one `mineBlock()` between the submits and the confirmations. Both payments land in the same block height.
 - [ ] **Step 2: Run it and see it fail**
-  Run: `npm test -w ops -- --test-name-pattern "E2E-18"`
+  Run: `cd ops && node --import tsx --test --test-name-pattern "E2E-18" "test/**/*.test.ts"`
   Expected: FAIL.
 - [ ] **Step 3: Implement** the wiring and the environment variable.
 - [ ] **Step 4: Run the ops suite**
@@ -322,7 +322,6 @@ Behavior:
 
 **Files:**
 - Modify: `packages/sdk/src/x402.ts:56-61`
-- Modify: `ops/build/live-flow.ts` (the `confirm(result.txHash)` call at line 203)
 - Test: `packages/sdk/test/sdk.test.ts`
 - Modify: `docs/TEST-PLAN.md` (SDK-09)
 
@@ -332,9 +331,9 @@ Behavior:
 
 - [ ] **Step 1: Write the failing test** `SDK-09 the stealth signer accepts a funding output with another transaction hash`. Stub the relayer so `settle` returns `txHash` X. Fund the one-time address in a transaction with a different hash. The signer builds leg 2 from that output.
 - [ ] **Step 2: Run it and see it fail**
-  Run: `npm test -w packages/sdk -- --test-name-pattern "SDK-09"`
+  Run: `cd packages/sdk && node --import tsx --test --test-name-pattern "SDK-09" "test/**/*.test.ts"`
   Expected: FAIL, the poll times out.
-- [ ] **Step 3: Implement.** Delete the `u.ref.txId === receipt.txHash &&` condition. Keep every other condition. Add a short comment: a reset can rebuild the Settle with a new hash, and the one-time address is used once. In `live-flow.ts`, confirm through `GET /v1/settle/:id` until `confirmed`, instead of by hash.
+- [ ] **Step 3: Implement.** Delete the `u.ref.txId === receipt.txHash &&` condition. Keep every other condition. Add a short comment: a reset can rebuild the Settle with a new hash, and the one-time address is used once.
 - [ ] **Step 4: Run the SDK suite**
   Run: `npm test -w packages/sdk`
   Expected: PASS.
@@ -378,7 +377,7 @@ The lead runs this task, because it uses the funded Preprod deployment and `.env
 
 - [ ] **Step 1: Write `burst.ts`** with a local-chain test `OPS-xx burst reports blocks and time` in `ops/test/`, using the next free OPS ID.
 - [ ] **Step 2: Run the test and commit**
-  Run: `npm test -w ops -- --test-name-pattern "burst"`
+  Run: `cd ops && node --import tsx --test --test-name-pattern "burst" "test/**/*.test.ts"`
   `git commit -m "ops: a burst command measures how many blocks a set of payments uses"`
 - [ ] **Step 3: Run on Preprod with `ZX402_MAX_PENDING=1`, then `=4`,** with `--count 5`. The node and the seller run as in the runbook. Save both terminal logs under `docs/evidence/`.
 - [ ] **Step 4: Write the "Chaining on Preprod" section of `docs/measurements.md`.** It holds both runs: blocks used, total seconds, every hash, and any `BadInputsUTxO` retries seen in the node log.

@@ -12,7 +12,7 @@ import {
 } from '@meshsdk/core-cst';
 import { PV11_COST_MODELS } from '../src/cost-models.js';
 import { enterpriseAddress, keyHash, signTx } from '../src/keys.js';
-import { MAINNET_PARAMETERS, PREPROD_PARAMETERS, ScriptFailure, minFee, slotToTime, type Utxo } from '../src/types.js';
+import { MAINNET_PARAMETERS, PREPROD_PARAMETERS, ScriptFailure, SubmitRejected, minFee, slotToTime, type Utxo } from '../src/types.js';
 import { decodeTx, outputsOf } from '../src/txview.js';
 import { FakeChain, LedgerError, type LedgerRule } from '../src/testing/fake-chain.js';
 
@@ -631,6 +631,51 @@ test('TX-09 (time): mining drops transactions that expire at the new block slot'
   assert.deepEqual(c.mineBlock().txIds, []);
   assert.equal(c.transaction(id), undefined);
   assert.deepEqual(await c.getUtxos([input.ref]), [input]);
+});
+
+test('TX-12 mineBlock with a limit keeps the rest in the mempool', async () => {
+  const c = chain();
+  const parent = await c.submit(plain);
+  const childId = await c.submit(await payment(outputsOf(decodeTx(plain))[0]!));
+  c.mineBlock(20, { limit: 1 });
+  assert.deepEqual(c.blocks().at(-1)!.txIds, [parent]);
+  assert.deepEqual(c.mempoolTxIds(), [childId]);
+  assert.deepEqual(c.mineBlock().txIds, [childId]);
+});
+
+test('TX-12 dropTransaction removes descendants', async () => {
+  const other = utxo('70');
+  const c = chain([...resolved, other]);
+  const parent = await c.submit(plain);
+  const child = await c.submit(await payment(outputsOf(decodeTx(plain))[0]!));
+  const unrelated = await c.submit(await payment(other));
+  assert.deepEqual(c.dropTransaction(parent), [parent, child]);
+  assert.deepEqual(c.mempoolTxIds(), [unrelated]);
+});
+
+test('TX-13 transactionStatus follows a transaction', async () => {
+  const c = chain();
+  const txId = decodeTx(plain).txId;
+  assert.equal(await c.transactionStatus(txId), 'unknown');
+  await c.submit(plain);
+  assert.equal(await c.transactionStatus(txId), 'mempool');
+  c.mineBlock();
+  assert.equal(await c.transactionStatus(txId), 'confirmed');
+  c.rollback(1);
+  assert.equal(await c.transactionStatus(txId), 'unknown');
+});
+
+test('TX-13 a spent input is a SubmitRejected with reason bad_inputs', async () => {
+  const c = chain();
+  await c.submit(plain);
+  c.mineBlock();
+  await assert.rejects(c.submit(plain), (error: unknown) => {
+    assert.ok(error instanceof SubmitRejected);
+    assert.ok(error instanceof LedgerError);
+    assert.equal(error.rule, 'missing_input');
+    assert.equal(error.reason, 'bad_inputs');
+    return true;
+  });
 });
 
 test('TX-09 (rollback): rollback empties an unconfirmed child and history retains earlier blocks', async () => {
