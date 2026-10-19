@@ -227,7 +227,6 @@ A pending Insert or ASP update is simply dropped on a reset. The crank or the AS
 One change. After a reset, a rebuilt Settle has a new transaction hash.
 The stealth signer waits for its funding output by the first hash (`packages/sdk/src/x402.ts:57`, `u.ref.txId === receipt.txHash`), so it would never find a rebuilt one.
 The signer drops the hash check and matches the output by the one-time address and the expected value only. Each one-time address is fresh and used once, so the match stays exact.
-The live script `ops/build/live-flow.ts` confirms by hash too. It changes to confirm through the settle status or the nullifier.
 
 Nothing else changes.
 The SDK proves against confirmed indexer data, and a proof stays valid across chained pool transactions (section 4).
@@ -303,7 +302,7 @@ Each step is one small commit with its tests:
 5. The relayer builds through the sequencer. REL-06 to REL-09, and the rewritten REL-05.
 6. The crank builds through the sequencer. CRK-04, and the rewritten CRK-01.
 7. The ASP service submits through the sequencer, with the gate. REL-10.
-8. The SDK signer matches by address. `ops/build/live-flow.ts` confirms by status.
+8. The SDK signer matches by address.
 9. The Spec, handoff, test plan and runbook updates.
 10. The Preprod measurement, then the default of `maxPending` changes to 4.
 

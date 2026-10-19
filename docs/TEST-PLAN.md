@@ -227,6 +227,7 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | SDK-06 | The SDK proves again after `stale_root` or `stale_asp_root` |
 | SDK-07 | The SDK rejects a payout below the minimum ADA and a pointer address before proving |
 | SDK-08 | The SDK spends the larger note when two notes share a nullifier |
+| SDK-09 | The stealth signer finds its funding output by address and value, so a Settle rebuilt under a new hash still pays |
 | MON-01 | The solvency monitor raises an alert when a fake discrepancy is injected |
 
 ## 12. End to end on mainnet (`E2E`)

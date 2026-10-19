@@ -896,6 +896,48 @@ test('SDK-01 through SDK-08: local agent story with real validators and proofs',
   });
 });
 
+test('SDK-09 the stealth signer accepts a funding output with another transaction hash', {
+  timeout: 1_800_000,
+  skip: devKeysPresent(root) ? false : 'Development proving keys are absent: circuits/build/dev/manifest.json is required',
+}, async () => {
+  const { chain, options, walletSeed, seller } = await reuseGuardHarness();
+  const { ctx } = options;
+  const network = ctx.deployment.network;
+  const store = sdkModule.memoryStore();
+  const rebuiltHash = 'ab'.repeat(32);
+  // A reset rebuilds the Settle under a new hash. Report one that no chain transaction
+  // has, so only the one-time address and its value can identify the funding output.
+  const relayer: RelayerApi = {
+    getPool: () => options.relayer.getPool(),
+    getSettle: id => options.relayer.getSettle(id),
+    quote: payouts => options.relayer.quote(payouts),
+    settle: async request => ({ ...await options.relayer.settle(request), txHash: rebuiltHash }),
+  };
+  const sdk = sdkModule.createZx402({ ...options, store, relayer });
+  const deposited = await sdk.deposit({ amount: 10_000_000n, walletSeed });
+  await sdk.waitForNote(deposited.prepared.noteId);
+  // A short timeout makes a regression at the old hash check fail fast and clearly.
+  const quick = sdkModule.createZx402({ ...options, store, relayer,
+    poll: { ...options.poll, timeoutMs: 10_000 } });
+  await quick.sync();
+  const signer = quick.x402Signer();
+  const address = signer.getAddress();
+  const signed = await signer.buildAndSignPaymentTransaction({ network: `cardano:${network}`, asset: 'lovelace',
+    payTo: seller, amount: '2000000', maxTimeoutSeconds: 300 });
+  const view = decodeTx(Buffer.from(signed.transaction, 'base64').toString('hex'));
+  assert.equal(view.inputs.length, 1);
+  const [funding] = await chain.getUtxos(view.inputs);
+  assert.ok(funding);
+  assert.equal(funding.address, address);
+  assert.notEqual(funding.ref.txId, rebuiltHash);
+  assert.equal(signed.nonce, `${funding.ref.txId}#${funding.ref.index}`);
+  assert.equal(funding.value.lovelace, 2_000_000n + await stealthFee({ provider: chain, network },
+    { payTo: seller, price: 2_000_000n }));
+  assert.equal(view.outputs.length, 1);
+  assert.equal(view.outputs[0]!.address, seller);
+  assert.equal(view.outputs[0]!.value.lovelace, 2_000_000n);
+});
+
 
 test('SDK-03: quotes contain only public payout fields', {
   skip: devKeysPresent(root) ? false : 'Development proving keys are absent: circuits/build/dev/manifest.json is required',

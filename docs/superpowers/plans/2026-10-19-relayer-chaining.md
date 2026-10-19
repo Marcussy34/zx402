@@ -322,7 +322,6 @@ Behavior:
 
 **Files:**
 - Modify: `packages/sdk/src/x402.ts:56-61`
-- Modify: `ops/build/live-flow.ts` (the `confirm(result.txHash)` call at line 203)
 - Test: `packages/sdk/test/sdk.test.ts`
 - Modify: `docs/TEST-PLAN.md` (SDK-09)
 
@@ -334,7 +333,7 @@ Behavior:
 - [ ] **Step 2: Run it and see it fail**
   Run: `cd packages/sdk && node --import tsx --test --test-name-pattern "SDK-09" "test/**/*.test.ts"`
   Expected: FAIL, the poll times out.
-- [ ] **Step 3: Implement.** Delete the `u.ref.txId === receipt.txHash &&` condition. Keep every other condition. Add a short comment: a reset can rebuild the Settle with a new hash, and the one-time address is used once. In `live-flow.ts`, confirm through `GET /v1/settle/:id` until `confirmed`, instead of by hash.
+- [ ] **Step 3: Implement.** Delete the `u.ref.txId === receipt.txHash &&` condition. Keep every other condition. Add a short comment: a reset can rebuild the Settle with a new hash, and the one-time address is used once.
 - [ ] **Step 4: Run the SDK suite**
   Run: `npm test -w packages/sdk`
   Expected: PASS.
