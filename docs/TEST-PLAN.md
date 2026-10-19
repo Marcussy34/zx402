@@ -222,6 +222,9 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | REL-04 | A stale state root or ASP root returns the matching error code |
 | REL-05 | When another party spends the pool UTXO first, the relayer rebuilds and submits again |
 | REL-06 | Two settles chain inside one block window |
+| REL-07 | A dropped parent: the sequencer resets, the still-valid settles are rebuilt on the new head and land; a settle whose quote has expired ends `failed` |
+| REL-08 | When another party spends the pool first, the pending settle is rebuilt on the new head and lands |
+| REL-09 | A settle never pays twice: after a reset, the original and the rebuilt transaction cannot both land |
 | REL-10 | The ASP gate: no ASP update while a Settle is pending, no Settle while an ASP update is pending, and a waiting ASP update holds new Settles |
 | SEQ-01 | The sequencer overlay shows pending outputs and hides pending spends |
 | SEQ-02 | A child chains on a pending output and both land in one block; the gates follow `maxPending` and the transaction kinds |
