@@ -2,7 +2,10 @@ import { BlockfrostProvider, type UTxO } from '@meshsdk/core';
 import { deserializeScriptRef } from '@meshsdk/core-cst';
 import type { CostModels } from '../cost-models.js';
 import type { ChainHistory, TxRecord } from '../history.js';
-import { MAINNET_PARAMETERS, ScriptFailure, type Network, type Provider, type RedeemerTag, type Utxo } from '../types.js';
+import {
+  MAINNET_PARAMETERS, ScriptFailure, SubmitRejected, type Network, type Provider,
+  type RedeemerTag, type TxStatus, type TxStatusReader, type Utxo,
+} from '../types.js';
 
 /** The Mesh methods used by this adapter. Tests supply the same interface. */
 export interface MeshProviderLike {
@@ -80,11 +83,16 @@ function errorPayload(error: unknown): unknown {
   return payload;
 }
 
-function isNotFound(error: unknown): boolean {
+/** True when Blockfrost answered with this HTTP status, at any nesting level Mesh adds. */
+function isStatus(error: unknown, status: number): boolean {
   const payload = errorPayload(error);
   if (!payload || typeof payload !== 'object') return false;
   const record = payload as Record<string, unknown>;
-  return record.status === 404 || record.status_code === 404 || isNotFound(record.data) || isNotFound(record.response);
+  return record.status === status || record.status_code === status || isStatus(record.data, status) || isStatus(record.response, status);
+}
+
+function isNotFound(error: unknown): boolean {
+  return isStatus(error, 404);
 }
 
 function providerError(error: unknown, projectId: string): Error {
@@ -106,6 +114,13 @@ function providerError(error: unknown, projectId: string): Error {
   return scriptFailed ? new ScriptFailure(message, traces.map(redact)) : new Error(message);
 }
 
+/** Blockfrost answers 400 when the node refuses the transaction. Every other failure is an unknown outcome. */
+function submitRejected(error: unknown, projectId: string): SubmitRejected | null {
+  if (!isStatus(error, 400)) return null;
+  const message = providerError(error, projectId).message;
+  return new SubmitRejected(message, message.includes('BadInputsUTxO') ? 'bad_inputs' : 'other');
+}
+
 /** A request-level failure, before any answer from Blockfrost: a lost connection, a timeout, an overloaded gateway. */
 function transient(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -118,6 +133,8 @@ async function request<T>(action: () => Promise<T>, projectId: string, retries =
   for (let attempt = 0; ; attempt++) {
     try { return await action(); }
     catch (error) {
+      // A refused submit is a known outcome. Keep its class and its already-redacted message.
+      if (error instanceof SubmitRejected) throw error;
       if (attempt >= retries || !transient(error)) throw providerError(error, projectId);
       await new Promise(resolve => setTimeout(resolve, 1_500 * (attempt + 1)));
     }
@@ -145,7 +162,7 @@ async function addressPages<T>(mesh: MeshProviderLike, path: string): Promise<T[
   }
 }
 
-function adapt(mesh: MeshProviderLike, projectId: string): Provider {
+function adapt(mesh: MeshProviderLike, projectId: string): Provider & TxStatusReader {
   const outputsAt = (address: string) => addressPages<AddressOutput>(mesh, `addresses/${encodeURIComponent(address)}/utxos`);
   return {
     getUtxosAt: address => request(async () => {
@@ -217,17 +234,29 @@ function adapt(mesh: MeshProviderLike, projectId: string): Provider {
         return { tag, index: action.index, mem: BigInt(action.budget.mem), steps: BigInt(action.budget.steps) };
       });
     }, projectId),
-    submit: txCbor => request(() => mesh.submitTx(txCbor), projectId, 0),
+    transactionStatus: (txId): Promise<TxStatus> => request(async () => {
+      const hash = encodeURIComponent(txId);
+      // A confirmed transaction is indexed before it leaves the mempool view.
+      try { await mesh.get(`txs/${hash}`); return 'confirmed'; }
+      catch (error) { if (!isNotFound(error)) throw error; }
+      try { await mesh.get(`mempool/${hash}`); return 'mempool'; }
+      catch (error) { if (!isNotFound(error)) throw error; }
+      return 'unknown';
+    }, projectId),
+    submit: txCbor => request(async () => {
+      try { return await mesh.submitTx(txCbor); }
+      catch (error) { throw submitRejected(error, projectId) ?? error; }
+    }, projectId, 0),
   };
 }
 
 /** The same adapter over an injected Mesh implementation, without credentials. */
-export function providerFromMesh(mesh: MeshProviderLike): Provider {
+export function providerFromMesh(mesh: MeshProviderLike): Provider & TxStatusReader {
   return adapt(mesh, '');
 }
 
 /** Creates an uncached provider for the network encoded in the project ID. */
-export function blockfrostProvider(projectId: string, network: Network): Provider & ChainHistory {
+export function blockfrostProvider(projectId: string, network: Network): Provider & ChainHistory & TxStatusReader {
   if (!projectId.startsWith(network) || projectId.length <= network.length) {
     throw new Error(`Blockfrost project ID must belong to ${network}`);
   }

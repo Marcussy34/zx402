@@ -4,7 +4,7 @@ import { BlockfrostProvider, type BlockInfo, type UTxO } from '@meshsdk/core';
 import {
   blockfrostProvider, providerFromMesh, utxoFromMesh, utxoToMesh, type MeshProviderLike,
 } from '../src/providers/blockfrost.js';
-import { ScriptFailure, type Utxo } from '../src/types.js';
+import { ScriptFailure, SubmitRejected, type Utxo } from '../src/types.js';
 
 const txId = '11'.repeat(32);
 const address = 'addr_test1_fake';
@@ -201,6 +201,48 @@ test('REL-06 provider: evaluation passes converted additional UTXOs and returns 
 test('REL-02 provider: submission returns the provider transaction ID', async () => {
   const provider = providerFromMesh(fake({ submitTx: async cbor => { assert.equal(cbor, 'cafe'); return txId; } }));
   assert.equal(await provider.submit('cafe'), txId);
+});
+
+test('TX-14 a 400 submit answer is SubmitRejected', async () => {
+  // Model Mesh's Blockfrost wrapper: parseHttpError stringifies the axios answer.
+  const answer = (message: string): string => JSON.stringify({
+    data: { status_code: 400, error: 'Bad Request', message }, headers: {}, status: 400,
+  });
+  const submit = async (failure: unknown) => {
+    let calls = 0;
+    const provider = providerFromMesh(fake({ submitTx: async () => { calls += 1; throw failure; } }));
+    const error = await provider.submit('cafe').then(() => null, (reason: unknown) => reason);
+    return { error, calls };
+  };
+  const badInputs = await submit(answer('Bad Request (400): {"tag":"SubmitTransactionFailure","contents":{"error":"BadInputsUTxO"}}'));
+  assert.ok(badInputs.error instanceof SubmitRejected);
+  assert.equal(badInputs.error.reason, 'bad_inputs');
+  const other = await submit(answer('Bad Request (400): {"tag":"SubmitTransactionFailure","contents":{"error":"ValueNotConservedUTxO"}}'));
+  assert.ok(other.error instanceof SubmitRejected);
+  assert.equal(other.error.reason, 'other');
+  // A lost connection says nothing about whether a node took the transaction.
+  const lost = await submit(new Error('socket hang up'));
+  assert.ok(lost.error instanceof Error);
+  assert.equal(lost.error instanceof SubmitRejected, false);
+  assert.equal(lost.calls, 1);
+});
+
+test('TX-14 transactionStatus reads the chain, then the mempool', async () => {
+  const read = async (found: 'txs' | 'mempool' | null) => {
+    const calls: string[] = [];
+    const provider = providerFromMesh(fake({ get: async (path: string) => {
+      calls.push(path);
+      if (found !== null && path.startsWith(`${found}/`)) return { tx_hash: txId };
+      throw notFound;
+    } }));
+    return { status: await provider.transactionStatus(txId), calls };
+  };
+  assert.deepEqual(await read('txs'), { status: 'confirmed', calls: [`txs/${txId}`] });
+  assert.deepEqual(await read('mempool'), { status: 'mempool', calls: [`txs/${txId}`, `mempool/${txId}`] });
+  assert.deepEqual(await read(null), { status: 'unknown', calls: [`txs/${txId}`, `mempool/${txId}`] });
+  // A 404 is an answer; anything else is a failed read.
+  const broken = providerFromMesh(fake({ get: async () => { throw { status: 500, message: 'upstream failed' }; } }));
+  await assert.rejects(broken.transactionStatus(txId), /upstream failed/);
 });
 
 test('REL-03 provider: nested Mesh script failures become ScriptFailure with traces', async () => {

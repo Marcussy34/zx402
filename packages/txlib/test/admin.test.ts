@@ -9,7 +9,7 @@ import { devKeysPresent, loadDevArtifacts, prove, shutdown } from '@zx402/prover
 import * as admin from '../src/admin.js';
 import {
   buildDeposit, buildInsert, buildSettle, decodeTx, enterpriseAddress, keyHash, nullifierInsertion,
-  planInsert, readConfig, readDeposits, readPool, ScriptFailure, signTx,
+  planInsert, readAsp, readConfig, readDeposits, readPool, ScriptFailure, signTx, timeToSlot,
   type BuiltTx, type ConfigDatum, type Utxo,
 } from '../src/index.js';
 import { startDevnet } from '../src/testing/devnet.js';
@@ -83,6 +83,25 @@ test('ADM-01: a larger admin datum takes its minimum lovelace increase from the 
   assert.ok(extra > 0n);
   assert.equal(before - sum(await chain.getUtxosAt(payer.address)), extra + tx.fee);
   assert.deepEqual(next.utxo.value.assets, old.utxo.value.assets);
+});
+
+test('TX-15 Insert and ASP updates carry a deadline', { timeout: 180_000 }, async () => {
+  const { chain, ctx, keys } = await startDevnet();
+  const network = ctx.deployment.network;
+  // Aiken's slot conversion starts at the network's configured Shelley-era origin.
+  chain.advanceSlots(NETWORKS[network].zeroSlot);
+  const payer = { address: enterpriseAddress(keys.asp, network) };
+  const root = (await readAsp(ctx)).datum.root;
+  const signers = [hex(keyHash(keys.asp))];
+  const tip = await chain.getTip();
+  const tx = await admin.buildAspUpdate(ctx, { payer, root, signers, validForMs: 120_000 });
+  assert.equal(decodeTx(tx.cbor).invalidHereafter, timeToSlot(tip.time + 120_000, network));
+  // No option means the ten-minute default.
+  const fallback = await admin.buildAspUpdate(ctx, { payer, root, signers });
+  assert.equal(decodeTx(fallback.cbor).invalidHereafter, timeToSlot(tip.time + 600_000, network));
+  for (const validForMs of [0, -1, 1.5]) {
+    await assert.rejects(admin.buildAspUpdate(ctx, { payer, root, signers, validForMs }), /positive safe integer/);
+  }
 });
 
 test('ADM-02: zero, negative, and unaccrued fee collections are refused', { timeout: 180_000 }, async () => {

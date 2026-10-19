@@ -202,6 +202,8 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | TX-09 | The stealth leg-2 payment has one input, one output, and a fee equal to input minus price |
 | TX-12 | The FakeChain mines part of its mempool and drops a transaction with its descendants |
 | TX-13 | The FakeChain reports a transaction as in the mempool, confirmed, or unknown, and a spent input is a `SubmitRejected` with reason `bad_inputs` |
+| TX-14 | Blockfrost submit sorts a 400 answer into `SubmitRejected` (`bad_inputs` or `other`) and any other failure into an unknown outcome; `transactionStatus` reads the chain, then the mempool |
+| TX-15 | Insert and ASP update transactions carry an upper validity bound, 600,000 ms ahead by default |
 
 ## 11. Services and SDK
 
