@@ -21,14 +21,19 @@ const COLLATERAL = 5_000_000n;
 
 /**
  * The relayer outputs a top-up must add. In a token pool the relayer's change also holds its fee tokens,
- * so after one settle its wallet may have no ADA-only output left for collateral. Keep a dedicated one:
- * the largest-first coin selection spends the larger float first and leaves this small output alone.
+ * so it is never ADA-only, and chained Settles drain the ADA-only float fast. Keep a dedicated collateral
+ * output and an ADA-only float large enough for the whole burst: the largest-first coin selection then
+ * spends the float and its change, and never needs the small collateral output.
  */
-export function relayerTopUp(utxos: Utxo[], threshold: bigint): bigint[] {
-  const outputs: bigint[] = [];
-  if (!utxos.some(utxo => Object.keys(utxo.value.assets).length === 0 && utxo.value.lovelace >= COLLATERAL)) outputs.push(COLLATERAL);
-  const funded = [...utxos.map(utxo => utxo.value.lovelace), ...outputs].reduce((sum, value) => sum + value, 0n);
-  if (funded < threshold) outputs.push(threshold - funded);
+export function relayerTopUp(utxos: Utxo[], float: bigint): bigint[] {
+  const adaOnly = utxos.filter(utxo => Object.keys(utxo.value.assets).length === 0)
+    .sort((a, b) => a.value.lovelace < b.value.lovelace ? -1 : a.value.lovelace > b.value.lovelace ? 1 : 0);
+  // complete() takes the smallest ADA-only output of at least 5 ADA as collateral.
+  const collateral = adaOnly.find(utxo => utxo.value.lovelace >= COLLATERAL);
+  const outputs: bigint[] = collateral ? [] : [COLLATERAL];
+  // Token outputs hold mostly their minimum ADA, so only the other ADA-only outputs count as float.
+  const funded = adaOnly.filter(utxo => utxo !== collateral).reduce((sum, utxo) => sum + utxo.value.lovelace, 0n);
+  if (funded < float) outputs.push(float - funded);
   return outputs;
 }
 
@@ -86,9 +91,10 @@ export async function runBurst(o: BurstOptions): Promise<BurstReport> {
 
   // Top up the relayer once, before any payment, so it can pay fees for every settle plus a margin.
   const relayerAddress = enterpriseAddress(o.seeds.relayer, network);
-  const threshold = (BigInt(o.count) * 3n + 10n) * 1_000_000n;
+  // Each chained Settle spends about 2.75 ADA of the float, plus change that must stay above its minimum.
+  const threshold = (BigInt(o.count) * 4n + 10n) * 1_000_000n;
   const topUp = relayerTopUp(await o.ctx.provider.getUtxosAt(relayerAddress), threshold);
-  if (topUp.length === 0) log('Relayer holds enough ADA and an ADA-only collateral output; no top-up is needed');
+  if (topUp.length === 0) log('Relayer holds an ADA-only float and collateral output; no top-up is needed');
   else {
     const start = now();
     const builder = await newTxBuilder({ provider: o.ctx.provider, network });

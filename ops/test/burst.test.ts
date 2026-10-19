@@ -53,17 +53,17 @@ test('OPS-07 burst reports blocks and time', {
 });
 
 // A token pool leaves the relayer's change holding its fee tokens, so the wallet must keep one ADA-only output for collateral.
-test('OPS-07 the relayer top-up keeps an ADA-only collateral output', () => {
+// Token outputs hold mostly their minimum ADA, so only ADA-only outputs other than the collateral count as the float.
+test('OPS-07 the relayer top-up keeps an ADA-only collateral output and an ADA-only float', () => {
   const ADA = 1_000_000n;
   const utxo = (lovelace: bigint, tokens = 0n) => ({ ref: { txId: '00'.repeat(32), index: 0 }, address: 'addr_test1', inlineDatum: null,
     datumHash: null, scriptRef: null, value: { lovelace, assets: tokens > 0n ? { ['ab'.repeat(28) + 'cd']: tokens } : {} } });
-  // Only token-bearing outputs: add a collateral output, and nothing more once the total reaches the threshold.
-  assert.deepEqual(relayerTopUp([utxo(17n * ADA, 1n), utxo(5n * ADA, 1n)], 25n * ADA), [5n * ADA]);
-  // Only token-bearing outputs and a shortfall: the collateral output, then the rest of the shortfall.
-  assert.deepEqual(relayerTopUp([utxo(3n * ADA, 1n)], 25n * ADA), [5n * ADA, 17n * ADA]);
-  // An ADA-only output of at least 5 ADA already serves as collateral.
-  assert.deepEqual(relayerTopUp([utxo(5n * ADA), utxo(30n * ADA, 1n)], 25n * ADA), []);
-  assert.deepEqual(relayerTopUp([utxo(6n * ADA)], 25n * ADA), [19n * ADA]);
-  // An empty wallet gets both.
-  assert.deepEqual(relayerTopUp([], 25n * ADA), [5n * ADA, 20n * ADA]);
+  // Only token-bearing outputs: a collateral output and the whole float.
+  assert.deepEqual(relayerTopUp([utxo(17n * ADA, 1n), utxo(5n * ADA, 1n)], 30n * ADA), [5n * ADA, 30n * ADA]);
+  assert.deepEqual(relayerTopUp([], 30n * ADA), [5n * ADA, 30n * ADA]);
+  // An ADA-only output of at least 5 ADA serves as collateral, and does not count as float.
+  assert.deepEqual(relayerTopUp([utxo(6n * ADA), utxo(30n * ADA, 1n)], 30n * ADA), [30n * ADA]);
+  // The smallest qualifying output is the collateral, as complete() picks it; the larger ones are float.
+  assert.deepEqual(relayerTopUp([utxo(5n * ADA), utxo(12n * ADA)], 30n * ADA), [18n * ADA]);
+  assert.deepEqual(relayerTopUp([utxo(5n * ADA), utxo(40n * ADA)], 30n * ADA), []);
 });
