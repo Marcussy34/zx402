@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { ApiError, type DepositView, type ErrorCode, type IndexerApi, type RelayerApi, type SettleRequest } from '@zx402/api';
 import { commitment, deriveNoteSecrets, deriveOneTimeKey, MerkleTree, NETWORKS, nullifierHash, precommitment, type Note } from '@zx402/crypto';
 import { devKeysPresent, loadDevArtifacts, loadDevVkey, shutdown } from '@zx402/prover';
-import { assetUnit, assetWireUnit, buildConfigUpdate, buildDeposit, decodeDepositDatum, decodeTx, enterpriseAddress, keyHash, readConfig,
+import { Sequencer, assetUnit, assetWireUnit, buildConfigUpdate, buildDeposit, decodeDepositDatum, decodeTx, enterpriseAddress, keyHash, readConfig,
   sellerMinimumLovelace, signTx, slotToTime, stealthFee, timeToSlot, type AssetClass, type Provider } from '@zx402/txlib';
 import { startDevnet } from '@zx402/txlib/testing/devnet';
 import { Indexer } from '@zx402/indexer';
@@ -39,16 +39,18 @@ async function reuseGuardHarness(asset: AssetClass = { policy: '', name: '' }) {
   chain.advanceSlots(NETWORKS[ctx.deployment.network].zeroSlot);
   let asp: AspService;
   const indexer = new Indexer({ ctx, history: chain, aspLeaves: () => asp.leaves() });
-  asp = new AspService({ ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] });
+  const sequencer = new Sequencer({ ctx, status: chain });
+  asp = new AspService({ ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] });
   await indexer.sync();
   const artifacts = { spend: await loadDevArtifacts('spend', root), ragequit: await loadDevArtifacts('ragequit', root) };
-  const crank = new Crank({ ctx, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
+  const crank = new Crank({ ctx, sequencer, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
   let now = (await chain.getTip()).time;
-  const relayer = new Relayer({ ctx, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
+  const relayer = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
     now: () => now, retryDelayMs: 1 });
   async function confirm() {
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     now = (await chain.getTip()).time;
   }
   async function advance() {
@@ -236,7 +238,8 @@ test('TOKEN-23 recover one-time funds in a token pool', async () => {
   const small = add(1_000_000n, 5_000_000n);
   const large = add(3_000_000n, 2_000_000n);
   const indexer = new Indexer({ ctx, history: chain });
-  const relayer = new Relayer({ ctx, indexer, seed: keys.relayer, vkey: await loadDevVkey('spend', root) });
+  const relayer = new Relayer({ ctx, sequencer: new Sequencer({ ctx, status: chain }), indexer,
+    seed: keys.relayer, vkey: await loadDevVkey('spend', root) });
   const artifacts = { get spend(): never { throw new Error('Unexpected proving'); }, get ragequit(): never { throw new Error('Unexpected proving'); } };
   const store = sdkModule.memoryStore();
   const saved = { notes: [], nextDepositIndex: 0, nextChangeIndex: 0, nextOneTimeIndex: 9 };
@@ -584,13 +587,14 @@ test('SDK-01 through SDK-08: local agent story with real validators and proofs',
   const denied = new Set<string>();
   let asp: AspService;
   const indexer = new Indexer({ ctx, history: chain, aspLeaves: () => asp.leaves() });
-  asp = new AspService({ ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp],
+  const sequencer = new Sequencer({ ctx, status: chain });
+  asp = new AspService({ ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp],
     deny: deposit => denied.has(deposit.txId) });
   await indexer.sync();
   const artifacts = { spend: await loadDevArtifacts('spend', root), ragequit: await loadDevArtifacts('ragequit', root) };
-  const crank = new Crank({ ctx, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
+  const crank = new Crank({ ctx, sequencer, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
   let now = (await chain.getTip()).time;
-  const relayer = new Relayer({ ctx, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
+  const relayer = new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
     now: () => now, retryDelayMs: 1 });
   const calls: { method: string; args: unknown[] }[] = [];
   let staleAsp = false;
@@ -634,12 +638,15 @@ test('SDK-01 through SDK-08: local agent story with real validators and proofs',
     now = (await chain.getTip()).time;
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     await crank.tick();
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     await asp.tick();
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
   }
   const store = memoryStore();
   const options = { seed, ctx, indexer: observed, relayer: relay, artifacts,
@@ -992,22 +999,28 @@ test('SDK-01, SDK-03, SDK-04, SDK-08: hardening against dropped submissions and 
   const seller = enterpriseAddress(keys.users[2]!, network);
   let asp: AspService;
   const indexer = new Indexer({ ctx, history: chain, aspLeaves: () => asp.leaves() });
-  asp = new AspService({ ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] });
+  const sequencer = new Sequencer({ ctx, status: chain });
+  asp = new AspService({ ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] });
   await indexer.sync();
   const artifacts = { spend: await loadDevArtifacts('spend', root), ragequit: await loadDevArtifacts('ragequit', root) };
-  const crank = new Crank({ ctx, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
+  const crank = new Crank({ ctx, sequencer, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
   let now = (await chain.getTip()).time;
-  const makeRelayer = (provider: Provider = chain) => new Relayer({ ctx: { ...ctx, provider }, indexer,
+  // A custom provider simulates a lost submit, so it needs its own submit path.
+  const makeRelayer = (provider: Provider = chain) => new Relayer({ ctx: { ...ctx, provider },
+    sequencer: provider === chain ? sequencer : new Sequencer({ ctx: { ...ctx, provider }, status: chain }), indexer,
     seed: keys.relayer, vkey: artifacts.spend.vkey, now: () => now, retryDelayMs: 1 });
   async function advance() {
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     await crank.tick();
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     await asp.tick();
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     now = (await chain.getTip()).time;
   }
   async function reach(time: number) {
@@ -1015,6 +1028,7 @@ test('SDK-01, SDK-03, SDK-04, SDK-08: hardening against dropped submissions and 
     chain.mineBlock(slot - (await chain.getTip()).slot);
     now = (await chain.getTip()).time;
     await indexer.sync();
+    await sequencer.reconcile();
   }
   const options = { ctx, indexer, artifacts, poll: { intervalMs: 1, timeoutMs: 600_000, onPoll: advance } };
   const payouts = [{ address: seller, amount: 2_000_000n }];
@@ -1177,7 +1191,8 @@ test('SDK-03, SDK-04: hardening rejects untrusted fees and seller prices before 
     getAspLeaves: async from => ({ from, root: approved.root, leaves: from === 0 ? [42n] : [] }),
     getDeposits: async () => [], getNullifiers: async from => ({ from, nullifiers: [] }),
   };
-  const relayer = new Relayer({ ctx, indexer: snapshot, seed: keys.relayer, vkey: await loadDevVkey('spend', root),
+  const relayer = new Relayer({ ctx, sequencer: new Sequencer({ ctx, status: chain }), indexer: snapshot,
+    seed: keys.relayer, vkey: await loadDevVkey('spend', root),
     now: () => slotToTime(pool.tip.slot, ctx.deployment.network) });
   const store = sdkModule.memoryStore();
   await store.save({ nextDepositIndex: 1, nextChangeIndex: 0, nextOneTimeIndex: 0, notes: [{
@@ -1408,28 +1423,33 @@ test('SDK-01, SDK-03, SDK-04: Round 2 preserves uncertain submissions and recove
   const seller = enterpriseAddress(keys.users[1]!, network);
   let asp: AspService;
   const indexer = new Indexer({ ctx, history: chain, aspLeaves: () => asp.leaves() });
-  asp = new AspService({ ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] });
+  const sequencer = new Sequencer({ ctx, status: chain });
+  asp = new AspService({ ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] });
   await indexer.sync();
   const artifacts = { spend: await loadDevArtifacts('spend', root), ragequit: await loadDevArtifacts('ragequit', root) };
-  const crank = new Crank({ ctx, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
+  const crank = new Crank({ ctx, sequencer, indexer, seed: keys.crank, artifacts: await loadDevArtifacts('insert', root) });
   let now = (await chain.getTip()).time;
-  const makeRelayer = () => new Relayer({ ctx, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
+  const makeRelayer = () => new Relayer({ ctx, sequencer, indexer, seed: keys.relayer, vkey: artifacts.spend.vkey,
     now: () => now, retryDelayMs: 1 });
   async function advance() {
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     await crank.tick();
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     await asp.tick();
     chain.mineBlock();
     await indexer.sync();
+    await sequencer.reconcile();
     now = (await chain.getTip()).time;
   }
   async function reach(time: number) {
     chain.mineBlock(timeToSlot(time, network) - (await chain.getTip()).slot);
     now = (await chain.getTip()).time;
     await indexer.sync();
+    await sequencer.reconcile();
   }
   const options = { ctx, indexer, artifacts, poll: { intervalMs: 1, timeoutMs: 600_000, onPoll: advance } };
   const payouts = [{ address: seller, amount: 2_000_000n }];
@@ -1468,6 +1488,7 @@ test('SDK-01, SDK-03, SDK-04: Round 2 preserves uncertain submissions and recove
       if (accepted) {
         chain.mineBlock();
         await indexer.sync();
+        await sequencer.reconcile();
         await resumed.sync();
         assert.equal(resumed.listNotes().find(n => n.id === 'd0')!.status, 'spent');
         assert.equal(resumed.listNotes().find(n => n.id === 'd0')!.pending, undefined);
@@ -1605,7 +1626,8 @@ test('SDK-04: Round 2 recovery checks destinations and selects the largest confi
   const store = sdkModule.memoryStore();
   await store.save({ notes: [], nextDepositIndex: 0, nextChangeIndex: 0, nextOneTimeIndex: 9 });
   const indexer = new Indexer({ ctx, history: chain });
-  const relayer = new Relayer({ ctx, indexer, seed: keys.relayer, vkey: await loadDevVkey('spend', root) });
+  const relayer = new Relayer({ ctx, sequencer: new Sequencer({ ctx, status: chain }), indexer,
+    seed: keys.relayer, vkey: await loadDevVkey('spend', root) });
   const artifacts = { get spend(): never { throw new Error('Unexpected proving'); }, get ragequit(): never { throw new Error('Unexpected proving'); } };
   let reads = 0;
   let submitted = 0;

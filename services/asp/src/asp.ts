@@ -1,17 +1,18 @@
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import type { DepositView, IndexerApi } from '@zx402/api';
 import { MerkleTree, assertCanonical } from '@zx402/crypto';
-import { buildAspUpdate, decodeTx, enterpriseAddress, keyHash, readAsp, signTx, type ChainContext } from '@zx402/txlib';
+import {
+  buildAspUpdate, decodeTx, enterpriseAddress, keyHash, readAsp, signTx, type ChainContext, type Sequencer,
+} from '@zx402/txlib';
 
 interface Options {
   ctx: ChainContext;
+  sequencer: Sequencer;
   indexer: IndexerApi;
   payerSeed: Uint8Array;
   operatorSeeds: Uint8Array[];
   deny?: (deposit: DepositView) => boolean;
   storePath?: string;
-  retryAfterMs?: number;
-  now?: () => number;
 }
 interface TickResult { approved: number; txId: string | null }
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
@@ -35,7 +36,6 @@ export class AspService {
   private previousRoot = this.approvedRoot;
   private removed = new Set<bigint>();
   private ticking?: Promise<TickResult>;
-  private pending?: { txId: string; input: string; submittedAt: number };
 
   constructor(a: Options) {
     this.options = a;
@@ -95,7 +95,8 @@ export class AspService {
   }
 
   private async update(): Promise<TickResult> {
-    const { ctx, indexer, payerSeed, operatorSeeds, deny } = this.options;
+    const { ctx, sequencer, indexer, payerSeed, operatorSeeds, deny } = this.options;
+    // The approval bookkeeping follows confirmed roots, never pending ones.
     const current = await readAsp(ctx);
     // Preserve confirmed approvals before adding newly absorbed deposits.
     if (this.approvedRoot === current.datum.root && (this.published.length !== this.approved.length
@@ -127,25 +128,24 @@ export class AspService {
       this.approvedRoot = root;
     }
     const input = `${current.utxo.ref.txId}#${current.utxo.ref.index}`;
-    const now = this.options.now ?? Date.now;
-    // A provider can accept a transaction that never confirms. Retry after a bounded wait.
-    if (this.pending?.input === input && now() - this.pending.submittedAt < (this.options.retryAfterMs ?? 180_000)) {
-      return { approved, txId: null };
-    }
-    this.pending = undefined;
     const root = this.approvedRoot;
     if (root === current.datum.root) return { approved, txId: null };
+    // A pending Settle uses the current ASP output, so the update waits for a block.
+    if (!sequencer.canSubmit('asp')) return { approved, txId: null };
     const signers = [...new Set(operatorSeeds.map(seed => hex(keyHash(seed))))];
     if (signers.filter(signer => current.datum.operators.includes(signer)).length < current.datum.threshold) {
       throw new Error('Operator signatures do not satisfy the ASP threshold');
     }
-    const tx = await buildAspUpdate(ctx, { root, signers,
-      payer: { address: enterpriseAddress(payerSeed, ctx.deployment.network) } });
-    if (!decodeTx(tx.cbor).inputs.some(ref => `${ref.txId}#${ref.index}` === input)) throw new Error('ASP state changed while building the update');
-    const signed = signTx(tx.cbor, [payerSeed, ...operatorSeeds]);
-    await ctx.provider.evaluate(signed);
-    const txId = await ctx.provider.submit(signed);
-    this.pending = { txId, input, submittedAt: now() };
-    return { approved, txId };
+    return sequencer.run(async () => {
+      // A run queued ahead of this one may have submitted a Settle.
+      if (!sequencer.canSubmit('asp')) return { approved, txId: null };
+      const tx = await buildAspUpdate(sequencer.ctx, { root, signers,
+        payer: { address: enterpriseAddress(payerSeed, ctx.deployment.network) } });
+      if (!decodeTx(tx.cbor).inputs.some(ref => `${ref.txId}#${ref.index}` === input)) throw new Error('ASP state changed while building the update');
+      const signed = signTx(tx.cbor, [payerSeed, ...operatorSeeds]);
+      await sequencer.ctx.provider.evaluate(signed);
+      const result = await sequencer.submit(signed, { kind: 'asp' });
+      return { approved, txId: result.status === 'rejected' ? null : result.txId };
+    });
   }
 }

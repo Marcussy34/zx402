@@ -4,11 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  MerkleTree, NETWORKS, deriveNoteSecrets, insertWitness, precommitment, spendWitness, type Note,
+  MerkleTree, NETWORKS, contextFor, deriveNoteSecrets, insertWitness, precommitment, spendWitness, type Note,
 } from '@zx402/crypto';
 import { devKeysPresent, loadDevArtifacts, prove, shutdown } from '@zx402/prover';
 import {
-  buildDeposit, buildInsert, decodeTx, enterpriseAddress, keyHash, planInsert, readAsp, readConfig, readDeposits, readPool,
+  Sequencer, buildDeposit, buildInsert, buildSettle, enterpriseAddress, keyHash, nullifierInsertion,
+  planInsert, readAsp, readConfig, readDeposits, readPool, signTx,
 } from '@zx402/txlib';
 import { startDevnet } from '@zx402/txlib/testing/devnet';
 import { Indexer } from '@zx402/indexer';
@@ -29,7 +30,8 @@ test('ASP-01, IDX-01: current and previous confirmed leaves survive indexer lag 
   writeFileSync(storePath, JSON.stringify({ version: 1, poolId: ctx.deployment.poolId, leaves: ['11'], removed: [] }));
   let service: AspService;
   const indexer = new Indexer({ ctx, history: chain, aspLeaves: root => service.leaves(root) });
-  const options = { ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp], storePath };
+  const sequencer = new Sequencer({ ctx, status: chain });
+  const options = { ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp], storePath };
   service = new AspService(options);
   await indexer.sync();
   assert.deepEqual((await indexer.getAspLeaves(0, 10)).leaves, []);
@@ -39,6 +41,8 @@ test('ASP-01, IDX-01: current and previous confirmed leaves survive indexer lag 
   await indexer.sync();
   assert.deepEqual((await indexer.getAspLeaves(0, 10)).leaves, []);
   chain.mineBlock();
+  // The node reconciles after each block, so the confirmed update leaves the pending list.
+  await sequencer.reconcile();
   await indexer.sync();
   assert.deepEqual((await indexer.getAspLeaves(0, 10)).leaves, [11n]);
   const publishedRoot = (await indexer.getPool()).aspRoot;
@@ -58,6 +62,7 @@ test('ASP-01, IDX-01: current and previous confirmed leaves survive indexer lag 
   assert.deepEqual((await indexer.getAspLeaves(0, 10)).leaves, [11n]);
   const oldTip = await chain.getTip();
   chain.mineBlock();
+  await sequencer.reconcile();
   await service.tick();
   const currentRoot = (await readAsp(ctx)).datum.root;
   // The ASP sees confirmation before the indexer's provider advances its tip.
@@ -84,7 +89,8 @@ test('ASP-01: unchanged approved and published lists reuse cached roots', async 
   const { chain, ctx, keys } = await startDevnet();
   const indexer = new Indexer({ ctx, history: chain });
   await indexer.sync();
-  const service = new AspService({ ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] });
+  const service = new AspService({ ctx, sequencer: new Sequencer({ ctx, status: chain }), indexer,
+    payerSeed: keys.operator, operatorSeeds: [keys.asp] });
   const root = (await readAsp(ctx)).datum.root;
   const hashes = t.mock.method(MerkleTree, 'fromLeaves');
   for (let i = 0; i < 3; i += 1) {
@@ -96,7 +102,7 @@ test('ASP-01: unchanged approved and published lists reuse cached roots', async 
   assert.equal(hashes.mock.callCount(), 0);
 });
 
-test('ASP-01, TX-07: a dropped submission is retried only after its deadline', async t => {
+test('ASP-01: a dropped submission is retried after two reconciles', async t => {
   const { chain, ctx, keys } = await startDevnet();
   const build = fileURLToPath(new URL('../build/', import.meta.url));
   mkdirSync(build, { recursive: true });
@@ -110,25 +116,25 @@ test('ASP-01, TX-07: a dropped submission is retried only after its deadline', a
   let submissions = 0;
   t.mock.method(chain, 'submit', async (cbor: string) => {
     submissions += 1;
-    return submissions === 1 ? decodeTx(cbor).txId : submit(cbor);
+    return submit(cbor);
   });
-  let now = 1_000;
-  const service = new AspService({ ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp],
-    storePath, retryAfterMs: 100, now: () => now });
+  const sequencer = new Sequencer({ ctx, status: chain });
+  const service = new AspService({ ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp], storePath });
   const first = await service.tick();
   assert.ok(first.txId);
-  assert.equal(chain.transaction(first.txId), undefined);
-  for (const elapsed of [0, 50, 99]) {
-    now = 1_000 + elapsed;
-    assert.deepEqual(await service.tick(), { approved: 0, txId: null });
-  }
+  // While the update is pending and not dropped, another round submits nothing.
+  assert.deepEqual(await service.tick(), { approved: 0, txId: null });
   assert.equal(submissions, 1);
-  now = 1_100;
+  // Two unknown status reads in a row mean the transaction was dropped.
+  chain.dropTransaction(first.txId);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.equal((await sequencer.reconcile())?.reason, 'dropped');
   const retry = await service.tick();
   assert.ok(retry.txId);
   assert.equal(submissions, 2);
-  assert.equal(chain.transaction(retry.txId)?.block, null);
+  assert.deepEqual(chain.mempoolTxIds(), [retry.txId]);
   chain.mineBlock();
+  await sequencer.reconcile();
   assert.equal((await readAsp(ctx)).datum.root, MerkleTree.fromLeaves([11n]).root);
   assert.deepEqual(await service.tick(), { approved: 0, txId: null });
   assert.equal(submissions, 2);
@@ -159,7 +165,8 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
   const indexer = new Indexer({ ctx, history: chain, aspLeaves: root => service?.leaves(root) ?? [] });
   await indexer.sync();
   const labels = plan.credited.map(credit => credit.label);
-  const options = { ctx, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] };
+  const sequencer = new Sequencer({ ctx, status: chain });
+  const options = { ctx, sequencer, indexer, payerSeed: keys.operator, operatorSeeds: [keys.asp] };
   const build = fileURLToPath(new URL('../build/', import.meta.url));
   mkdirSync(build, { recursive: true });
   const directory = mkdtempSync(join(build, 'asp-test-'));
@@ -178,6 +185,7 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
     await indexer.sync();
     assert.deepEqual((await indexer.getAspLeaves(0, 10)).leaves, []);
     chain.mineBlock();
+    await sequencer.reconcile();
     assert.equal((await readAsp(ctx)).datum.root, MerkleTree.fromLeaves(labels).root);
     await indexer.sync();
     assert.deepEqual((await indexer.getAspLeaves(0, 10)).leaves, labels);
@@ -191,10 +199,12 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
     assert.ok(result.txId);
     assert.deepEqual(denied.leaves(), [labels[0]]);
     chain.mineBlock();
+    await sequencer.reconcile();
     assert.equal((await readAsp(ctx)).datum.root, MerkleTree.fromLeaves([labels[0]!]).root);
     const restore = await service.tick();
     assert.ok(restore.txId);
     chain.mineBlock();
+    await sequencer.reconcile();
   });
 
   await t.test('ASP-01: removal stays removed and prevents building a spend witness', async () => {
@@ -210,6 +220,7 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
     assert.equal(result.approved, 0);
     assert.ok(result.txId);
     chain.mineBlock();
+    await sequencer.reconcile();
     assert.equal((await readAsp(ctx)).datum.root, MerkleTree.fromLeaves([0n, labels[1]!]).root);
     assert.throws(() => spendWitness({ ...args, aspTree: MerkleTree.fromLeaves(service.leaves()) }), /aspTree leaf/);
     assert.deepEqual(await service.tick(), { approved: 0, txId: null });
@@ -229,5 +240,40 @@ test('ASP-01, TX-07: automatic approval, denial, removal, and persistence', {
     const before = await readAsp(ctx);
     await assert.rejects(unauthorized.tick(), /threshold|operator|sign/i);
     assert.deepEqual(await readAsp(ctx), before);
+  });
+
+  await t.test('REL-10: the ASP gate waits for a pending Settle', async () => {
+    const aspTree = MerkleTree.fromLeaves(service.leaves());
+    const user = keys.users.findIndex(seed => hex(keyHash(seed)) === plan.deposits[1]!.datum.refund);
+    const note: Note = { ...secrets[user]!, ...plan.credited[1]! };
+    const intent = { poolId: Buffer.from(ctx.deployment.poolId, 'hex'), relayer: keyHash(keys.relayer),
+      payouts: [{ address: { payment: { kind: 'key' as const, hash: keyHash(keys.users[0]!) }, stake: null },
+        amount: 1_000_000n, datumHash: null }],
+      validUntil: BigInt((await chain.getTip()).time + 300_000) };
+    const fresh = deriveNoteSecrets(keys.users[user]!, 1);
+    const spend = spendWitness({ note, stateTree: witness.tree, stateIndex: 1, aspTree, aspIndex: 1,
+      withdrawn: 1_000_000n, newNullifier: fresh.nullifier, newSecret: fresh.secret, context: contextFor(intent) });
+    const spendProof = await prove(await loadDevArtifacts('spend', repoRoot), spend.input);
+    const trie = await nullifierInsertion([], spend.public.nullifierHash);
+    const settle = await sequencer.run(async () => {
+      const pool = await readPool(sequencer.ctx);
+      const tx = await buildSettle(sequencer.ctx, { payer: payer(keys.relayer), pool, proof: spendProof.cardano,
+        ...spend.public, withdrawn: 1_000_000n, intent, nullifierProof: trie.proofCbor, newNullifierRoot: trie.newRoot });
+      return sequencer.submit(signTx(tx.cbor, [keys.relayer]), { kind: 'settle', nullifier: spend.public.nullifierHash });
+    });
+    assert.equal(settle.status, 'accepted');
+    // A pending Settle uses the current ASP output, so the update must wait.
+    service.remove(labels[1]!);
+    assert.deepEqual(await service.tick(), { approved: 0, txId: null });
+    assert.deepEqual(chain.mempoolTxIds(), [settle.txId]);
+    chain.mineBlock();
+    await sequencer.reconcile();
+    const update = await service.tick();
+    assert.ok(update.txId);
+    // A pending ASP update blocks the next Settle.
+    assert.equal(sequencer.canSubmit('settle'), false);
+    chain.mineBlock();
+    await sequencer.reconcile();
+    assert.equal((await readAsp(ctx)).datum.root, MerkleTree.fromLeaves(service.leaves()).root);
   });
 });

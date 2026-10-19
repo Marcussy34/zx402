@@ -213,7 +213,7 @@ Behavior (design 5.3, 5.7, 5.8):
   2. Inside `sequencer.run`, read `pool = await readPool(sequencer.ctx)` and run today's checks against it: `stateRoot`, `aspRoot`, spent nullifier and queue. The spent list is the indexer's list plus `sequencer.pendingNullifiers()`. `nullifierInsertion` uses that combined list. Its `oldRoot` must equal `pool.datum.nullifierRoot`, with today's retry when the indexer is behind. Build with `buildSettle(sequencer.ctx, ...)`, sign, then call `sequencer.submit(signed, { kind: 'settle', nullifier })`.
   3. On `accepted`, record and return `submitted`, as today. On `unknown`, keep today's `uncertain` path. On `rejected`, call `sequencer.reconcile()`, wait `retryDelayMs`, and try again. After 3 attempts, throw `internal`, as today.
 - Keep each sent request: `Submission` gains `request: SettleRequest` and `txHashes: string[]`.
-- Register `sequencer.onReset`. For each dropped Settle entry whose submission exists, whose nullifier is not confirmed and whose quote is still valid, queue a rebuild on `this.serial`. The rebuild uses the same attempt path and pushes the new hash to `txHashes`. Otherwise leave the entry for `getSettle`'s expiry rule.
+- Register `sequencer.onReset`. The listener only enqueues work and never awaits a rebuild, because listeners run while the caller of `run` or `reconcile` waits. For each dropped Settle entry whose submission exists, whose nullifier is not confirmed and whose quote is still valid, queue a rebuild on `this.serial`. The rebuild uses the same attempt path and pushes the new hash to `txHashes`. Otherwise leave the entry for `getSettle`'s expiry rule.
 - A rebuild that ends `rejected` or throws leaves the submission as it is. A reset can be wrong while the indexer lags, and the original may have landed. `getSettle` decides the final status from the nullifier and the deadline.
 - `getSettle`: keep today's rules. When it reports `confirmed`, `txHash` is the entry of `txHashes` whose `sequencer.transactionStatus` is `'confirmed'`. Fall back to the last one.
 
@@ -244,7 +244,8 @@ Behavior (design 5.3, 5.7, 5.8):
 **Files:**
 - Modify: `services/crank/src/crank.ts`
 - Modify: `services/asp/src/asp.ts`
-- Test: `services/crank/test/crank.test.ts`, and the ASP service test file in `services/asp/test/`
+- Test: `services/crank/test/crank.test.ts`, `services/asp/test/asp.test.ts`
+- Modify: `packages/sdk/test/sdk.test.ts` (its harnesses build a relayer, a crank and an ASP service: give each harness one shared `Sequencer`, as the node will)
 - Modify: `docs/TEST-PLAN.md` (CRK-04, REL-10), `docs/SPEC.md` 8.3 and 8.5
 
 **Interfaces:**

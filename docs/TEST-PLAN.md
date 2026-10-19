@@ -215,12 +215,14 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | CRK-01 | The crank triggers on the conditions in SPEC 8.3 |
 | CRK-02 | The crank builds a correct batch of queued notes, then deposits |
 | CRK-03 | The crank skips deposits that Insert would reject |
+| CRK-04 | An Insert chains on top of a pending Settle and both land in one block |
 | REL-01 | A quote covers payouts, the protocol fee, and the relayer fee |
 | REL-02 | A settle with a valid proof is built and submitted |
 | REL-03 | A settle with an invalid proof or a mismatched intent is refused before building |
 | REL-04 | A stale state root or ASP root returns the matching error code |
 | REL-05 | When another party spends the pool UTXO first, the relayer rebuilds and submits again |
 | REL-06 | Two settles chain inside one block window |
+| REL-10 | The ASP gate: no ASP update while a Settle is pending, and no Settle while an ASP update is pending |
 | SEQ-01 | The sequencer overlay shows pending outputs and hides pending spends |
 | SEQ-02 | A child chains on a pending output and both land in one block; the gates follow `maxPending` and the transaction kinds |
 | SEQ-03 | A dropped parent, a foreign spend, or an expired entry resets the chain, and reset listeners run after the lock is released |
