@@ -94,6 +94,8 @@ The node reads five optional settings from the environment:
 A value above 1 lets a new pool transaction build on one that is still pending, so several payments can land in one block.
 CAUTION: run the admin command only when the node has nothing pending. Otherwise pending Settles drop, and the node rebuilds them.
 
+In a token pool the relayer's change also holds its fee tokens, so it is never ADA-only. Keep one ADA-only output of at least 5 ADA in the relayer wallet for collateral, apart from the ADA it spends. Without it every Settle fails with `Payer needs an ADA-only collateral UTXO with at least 5 ADA`. The burst command adds this output when it is missing.
+
 ## 5. Run a seller
 
 The token seller settings are:

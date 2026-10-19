@@ -120,6 +120,7 @@ Known limits of M0, each a deliberate cut:
 - The sequencer keeps its pending list in memory. After a restart the first submit can be refused once, then the relayer rebuilds on the next head.
 - The sequencer remembers the last 64 confirmed Settle nullifiers to cover indexer lag. An indexer more than 64 Settles behind makes a new Settle fail with `internal` after three attempts. The SDK then retries with a new quote.
 - A request queued behind other relayer work can answer `quote_expired` somewhat after its deadline. It never sends a transaction after that deadline.
+- In a token pool the relayer's change holds its fee tokens, so its first Settle can spend its only ADA-only output and leave no collateral. The deploy command funds the relayer with one output. The operator must keep a separate ADA-only output of at least 5 ADA there. A later fix: `complete` could keep the chosen collateral out of the fee inputs.
 - A payout with a datum hash is refused by the Settle builder.
 - A change note cannot be recovered from the seed alone. The SDK needs its store file. After a lost store the SDK goes on safely with new secrets, but the unspent change notes of the old store stay out of reach, and the one-time addresses start again at the first one, which links those payments on chain.
 - The pool does not refuse a repeated precommitment on chain, as the Base implementation does. The SDK prevents it. A wallet without the SDK must do the same.

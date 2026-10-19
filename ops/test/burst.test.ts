@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { devKeysPresent, loadDevArtifacts, loadDevVkey, shutdown } from '@zx402/prover';
 import { timeToSlot } from '@zx402/txlib';
 import { startDevnet } from '@zx402/txlib/testing/devnet';
-import { runBurst } from '../src/burst.js';
+import { relayerTopUp, runBurst } from '../src/burst.js';
 import { startNode } from '../src/node.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -50,4 +50,20 @@ test('OPS-07 burst reports blocks and time', {
   assert.equal(report.blocks, 1);
   assert.equal(typeof report.lastSeconds, 'number');
   assert.ok(logs.some(line => /^Burst of 2: 2 confirmed in 1 distinct blocks, last confirmation after [0-9.]+ seconds$/.test(line)));
+});
+
+// A token pool leaves the relayer's change holding its fee tokens, so the wallet must keep one ADA-only output for collateral.
+test('OPS-07 the relayer top-up keeps an ADA-only collateral output', () => {
+  const ADA = 1_000_000n;
+  const utxo = (lovelace: bigint, tokens = 0n) => ({ ref: { txId: '00'.repeat(32), index: 0 }, address: 'addr_test1', inlineDatum: null,
+    datumHash: null, scriptRef: null, value: { lovelace, assets: tokens > 0n ? { ['ab'.repeat(28) + 'cd']: tokens } : {} } });
+  // Only token-bearing outputs: add a collateral output, and nothing more once the total reaches the threshold.
+  assert.deepEqual(relayerTopUp([utxo(17n * ADA, 1n), utxo(5n * ADA, 1n)], 25n * ADA), [5n * ADA]);
+  // Only token-bearing outputs and a shortfall: the collateral output, then the rest of the shortfall.
+  assert.deepEqual(relayerTopUp([utxo(3n * ADA, 1n)], 25n * ADA), [5n * ADA, 17n * ADA]);
+  // An ADA-only output of at least 5 ADA already serves as collateral.
+  assert.deepEqual(relayerTopUp([utxo(5n * ADA), utxo(30n * ADA, 1n)], 25n * ADA), []);
+  assert.deepEqual(relayerTopUp([utxo(6n * ADA)], 25n * ADA), [19n * ADA]);
+  // An empty wallet gets both.
+  assert.deepEqual(relayerTopUp([], 25n * ADA), [5n * ADA, 20n * ADA]);
 });
