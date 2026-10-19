@@ -200,6 +200,8 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | TX-07 | CollectFees, config update, and ASP update build and evaluate |
 | TX-08 | No pool transaction contains a mint, a withdrawal, or a certificate |
 | TX-09 | The stealth leg-2 payment has one input, one output, and a fee equal to input minus price |
+| TX-12 | The FakeChain mines part of its mempool and drops a transaction with its descendants |
+| TX-13 | The FakeChain reports a transaction as in the mempool, confirmed, or unknown, and a spent input is a `SubmitRejected` with reason `bad_inputs` |
 
 ## 11. Services and SDK
 
