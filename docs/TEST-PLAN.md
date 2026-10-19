@@ -236,6 +236,7 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | SEQ-06 | `reconcile` waits for `run`, and queued work keeps FIFO order |
 | SEQ-07 | A waiting ASP update holds new Settles until it is submitted, and the hold expires after `aspHoldMs` |
 | SEQ-08 | Recently confirmed nullifiers stay known; reconcile reads every entry and counts an unknown read once per gap; submit refuses a closed gate; a dropped ASP update re-arms the hold; a child retry stops at its deadline |
+| SEQ-09 | A just-confirmed transaction stays in the overlay while the provider still lists an input it spent, and an output spent after the provider caught up is never re-added |
 | SDK-01 | All notes are recovered from the seed plus indexer data |
 | SDK-02 | Sync downloads leaves in pages and never sends a commitment to the server |
 | SDK-03 | `settlePrivately` proves locally and never sends a secret |

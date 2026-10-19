@@ -29,6 +29,7 @@ export class Sequencer {
   private readonly now: () => number;
   private readonly log: (line: string) => void;
   private entries: PendingEntry[] = [];
+  private recentlyConfirmed: PendingEntry[] = [];
   private confirmedNullifiers: bigint[] = [];
   private holdUntil = 0;
   private lock: Promise<void> = Promise.resolve();
@@ -65,10 +66,17 @@ export class Sequencer {
     this.ctx = { deployment: a.ctx.deployment, provider: {
       getUtxosAt: async address => {
         const confirmed = await provider.getUtxosAt(address);
-        const spent = new Set(this.entries.flatMap(entry => entry.spent.map(refKey)));
+        const confirmedRefs = new Set(confirmed.map(output => refKey(output.ref)));
+        // Transaction status can confirm before the provider indexes address UTXOs.
+        // A missing output may have been spent later. Only a listed spend signals lag.
+        const recent = this.recentlyConfirmed.filter(entry =>
+          entry.spent.some(ref => confirmedRefs.has(refKey(ref))));
+        const entries = [...recent, ...this.entries];
+        // A caught-up child must still hide outputs reintroduced by an older entry.
+        const spent = new Set([...this.recentlyConfirmed, ...this.entries].flatMap(entry => entry.spent.map(refKey)));
         // A confirmed output may still be pending until the next reconcile.
         const outputs = new Map(confirmed.map(output => [refKey(output.ref), output]));
-        for (const entry of this.entries) {
+        for (const entry of entries) {
           for (const output of entry.outputs) if (output.address === address) outputs.set(refKey(output.ref), output);
         }
         // Filter after adding outputs, because a child can spend a pending output.
@@ -155,6 +163,9 @@ export class Sequencer {
         const status = await this.transactionStatus(entry.txId);
         if (status === 'confirmed') {
           this.entries.splice(i, 1);
+          // Keep the overlay through lag between transaction and address indexing.
+          this.recentlyConfirmed.push(entry);
+          if (this.recentlyConfirmed.length > 16) this.recentlyConfirmed.shift();
           // Keep nullifiers through the indexer's confirmation lag.
           if (entry.kind === 'settle' && entry.nullifier !== null) {
             this.confirmedNullifiers.push(entry.nullifier);

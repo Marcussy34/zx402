@@ -578,3 +578,142 @@ test('SEQ-08 a child retry uses now without a transaction upper bound', async ()
   assert.equal(calls, 1);
   assert.deepEqual(sequencer.pending(), []);
 });
+
+test('SEQ-09 a confirmed entry stays in the overlay while the provider still lists its spent input', async () => {
+  const { chain, ctx, input } = setup();
+  const snapshot = await chain.getUtxosAt(input.address);
+  const provider = providerWith(chain, { getUtxosAt: async address =>
+    structuredClone(snapshot.filter(output => output.address === address)) });
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain });
+  const parent = await submit(sequencer, 0, 0);
+  assert.deepEqual(chain.mineBlock().txIds, [parent.txId]);
+  assert.equal(await sequencer.transactionStatus(parent.txId), 'confirmed');
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending(), []);
+  const outputs = await sequencer.ctx.provider.getUtxosAt(input.address);
+  assert.equal(outputs.length, 1);
+  assert.deepEqual(outputs[0]!.ref, { txId: parent.txId, index: 0 });
+  assert.equal(outputs[0]!.value.lovelace, 19_000_000n);
+
+  const child = await payment(sequencer.ctx, 0, 1);
+  assert.deepEqual(decodeTx(child).inputs, [{ txId: parent.txId, index: 0 }]);
+  const result = await sequencer.run(() => sequencer.submit(child, { kind: 'settle' }));
+  assert.equal(result.status, 'accepted');
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(input.address), []);
+  assert.deepEqual((await sequencer.ctx.provider.getUtxosAt(addresses[1]!)).map(output => output.ref),
+    [{ txId: result.txId, index: 0 }]);
+});
+
+test('SEQ-09 the overlay drops a recent entry once the provider catches up', async () => {
+  const { chain, ctx, input } = setup();
+  const snapshot = await chain.getUtxosAt(input.address);
+  let stale = true;
+  const provider = providerWith(chain, { getUtxosAt: async address => stale
+    ? structuredClone(snapshot.filter(output => output.address === address)) : chain.getUtxosAt(address) });
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain });
+  const parent = await submit(sequencer, 0, 0);
+  chain.mineBlock();
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending(), []);
+  assert.deepEqual((await sequencer.ctx.provider.getUtxosAt(input.address)).map(output => output.ref),
+    [{ txId: parent.txId, index: 0 }]);
+
+  stale = false;
+  for (const address of addresses) {
+    assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(address), await provider.getUtxosAt(address));
+  }
+});
+
+test('SEQ-09 a reset preserves recent entries while discarding pending outputs', async () => {
+  const { chain, ctx, input } = setup();
+  const snapshot = await chain.getUtxosAt(input.address);
+  const provider = providerWith(chain, { getUtxosAt: async address =>
+    structuredClone(snapshot.filter(output => output.address === address)) });
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, maxPending: 2, unseenLimit: 1 });
+  const parent = await submit(sequencer, 0, 0, 'settle', 11n);
+  const child = await submit(sequencer, 0, 1, 'settle', 22n);
+  assert.deepEqual(chain.mineBlock(20, { limit: 1 }).txIds, [parent.txId]);
+  assert.equal(await sequencer.reconcile(), null);
+  chain.dropTransaction(child.txId);
+  assert.equal((await sequencer.reconcile())?.reason, 'dropped');
+  assert.deepEqual(sequencer.pending(), []);
+  assert.deepEqual(sequencer.recentNullifiers(), [11n]);
+  assert.deepEqual((await sequencer.ctx.provider.getUtxosAt(input.address)).map(output => output.ref),
+    [{ txId: parent.txId, index: 0 }]);
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(addresses[1]!), []);
+});
+
+test('SEQ-09 recent entries hide outputs spent by later recent entries', async () => {
+  const { chain, ctx, input } = setup();
+  const snapshot = await chain.getUtxosAt(input.address);
+  const provider = providerWith(chain, { getUtxosAt: async address =>
+    structuredClone(snapshot.filter(output => output.address === address)) });
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain, maxPending: 2 });
+  const parent = await submit(sequencer, 0, 0);
+  const child = await submit(sequencer, 0, 0);
+  assert.deepEqual(chain.mineBlock(0, { limit: 1 }).txIds, [parent.txId]);
+  snapshot.splice(0, snapshot.length, ...await chain.getUtxosAt(input.address));
+  assert.deepEqual(chain.mineBlock().txIds, [child.txId]);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending(), []);
+  assert.deepEqual((await sequencer.ctx.provider.getUtxosAt(input.address)).map(output => output.ref),
+    [{ txId: child.txId, index: 0 }]);
+});
+
+test('SEQ-09 a caught-up child does not revive an older recent output', async () => {
+  const { chain, ctx, input } = setup();
+  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2 });
+  const parent = await submit(sequencer, 0, 0);
+  const child = await submit(sequencer, 0, 0);
+  assert.deepEqual(chain.mineBlock().txIds, [parent.txId, child.txId]);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending(), []);
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(input.address), await chain.getUtxosAt(input.address));
+});
+
+test('SEQ-09 a recent child hides its spent input at an address with no continuing output', async () => {
+  const { chain, ctx } = setup();
+  const sequencer = new Sequencer({ ctx, status: chain, maxPending: 2 });
+  const parent = await submit(sequencer);
+  const child = await submit(sequencer, 1, 2);
+  assert.deepEqual(chain.mineBlock().txIds, [parent.txId, child.txId]);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending(), []);
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(addresses[1]!), []);
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(addresses[2]!), await chain.getUtxosAt(addresses[2]!));
+});
+
+test('SEQ-09 a missing output without a listed spent input is not added', async () => {
+  const { chain, ctx, input } = setup();
+  const snapshot = await chain.getUtxosAt(input.address);
+  const provider = providerWith(chain, { getUtxosAt: async address =>
+    structuredClone(snapshot.filter(output => output.address === address)) });
+  const sequencer = new Sequencer({ ctx: { ...ctx, provider }, status: chain });
+  const parent = await submit(sequencer);
+  assert.deepEqual(chain.mineBlock().txIds, [parent.txId]);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending(), []);
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(input.address), []);
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(addresses[1]!), []);
+  assert.deepEqual((await chain.getUtxosAt(addresses[1]!)).map(output => output.ref),
+    [{ txId: parent.txId, index: 0 }]);
+});
+
+test('SEQ-09 an output spent after the provider caught up is not re-added', async () => {
+  const { chain, ctx, input } = setup();
+  const sequencer = new Sequencer({ ctx, status: chain });
+  const parent = await submit(sequencer, 0, 0);
+  assert.deepEqual(chain.mineBlock().txIds, [parent.txId]);
+  assert.equal(await sequencer.reconcile(), null);
+  assert.deepEqual(sequencer.pending(), []);
+  assert.deepEqual(await sequencer.ctx.provider.getUtxosAt(input.address), await chain.getUtxosAt(input.address));
+
+  // An external transaction advances the head without entering this sequencer.
+  const external = await payment(ctx, 0, 0);
+  assert.deepEqual(decodeTx(external).inputs, [{ txId: parent.txId, index: 0 }]);
+  const externalId = await chain.submit(external);
+  assert.deepEqual(chain.mineBlock().txIds, [externalId]);
+  const outputs = await sequencer.ctx.provider.getUtxosAt(input.address);
+  assert.deepEqual(outputs, await chain.getUtxosAt(input.address));
+  assert.deepEqual(outputs.map(output => output.ref), [{ txId: externalId, index: 0 }]);
+});
