@@ -260,6 +260,7 @@ Its cases reuse four IDs for what they check:
 | E2E-02 | The exit returns the rest. The pool ends with its reserve plus fees. |
 | E2E-03 | A second run on the same chain and store works. |
 | E2E-04 | The node keeps running when one round fails. |
+| E2E-18 | The node chains two private payments in one block with `maxPending: 2`. This is a local test, not a canary step. |
 
 ### Admin actions (`ADM`)
 
