@@ -1,0 +1,18 @@
+indexer: Chain tip changed during sync; retry on the next poll
+Indexer http://127.0.0.1:4010; relayer http://127.0.0.1:4011
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 55
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+round: insert 0f772bfdf72603aee5c08cac140e1979ff796bd659807dd6826b0109d9bc9828 (1 deposits, 0 notes)
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1; asp f34376aef7683f823c63d439d2fbd448d526db919bce09b99313ee0babb96ffa (1 approvals)
+indexer: Pool history has not reached the current pool UTXO
+indexer: Pool history has not reached the current pool UTXO
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Pool history has not reached the current pool UTXO
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 5; insert 65cc6db601ffbfaa16823b5ee33f1b504017bfdb95bbd7cd0b4e8fbc97eca5ee (0 deposits, 4 notes)
+indexer: Chain tip changed during sync; retry on the next poll

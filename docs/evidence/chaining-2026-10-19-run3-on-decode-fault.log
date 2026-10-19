@@ -1,0 +1,25 @@
+Relayer top-up 1518eb481f883aef20edeefa9a9d6183e5ce6aced71fa62a204c81ced7eff045 of 8245100 lovelace submitted in 2.635 seconds
+Relayer top-up 1518eb481f883aef20edeefa9a9d6183e5ce6aced71fa62a204c81ced7eff045 confirmed in 31.395 seconds
+Wallet 0 reuses note c4
+Wallet 1 reuses note c3
+Wallet 2 reuses note c4
+Wallet 3 deposit 5063efcb42ef9a030cf6a85f89d7683352be8d8067ee22b9b59bd4a3f2ed72ee submitted in 4.338 seconds
+Wallet 3 note d1 spendable with 6000000 in 138.450 seconds
+Wallet 4 reuses note c4
+All 5 wallets are spendable
+Wallet 0 settle 27b00f39-cb6b-4477-bbfc-f0cf022e4c70 submitted as 45a6f496f386b2c26faf65b5870d526c3c3543ec5d4e103024d1bd124650b5f8 in 234.328 seconds
+Wallet 1 settle c44e3cb6-71d5-4da4-8bdf-f77863232830 submitted as d390a1105906bad5e3326d89f392a01cc18074251b879b640d2fab5cf26f164f in 234.328 seconds
+Wallet 2 settle 6a0787e8-dee4-476c-b1d9-c6222eaad0b4 submitted as 21a6e098988ed2013421268de901e38bf959e531573e23854258c09a076859e3 in 234.328 seconds
+Wallet 3 settle failed to start: Could not build or submit the settle transaction
+Wallet 4 settle failed to start: Could not build or submit the settle transaction
+Settle 27b00f39-cb6b-4477-bbfc-f0cf022e4c70 confirmed in 234.769 seconds
+Settle c44e3cb6-71d5-4da4-8bdf-f77863232830 confirmed in 235.249 seconds
+Settle 6a0787e8-dee4-476c-b1d9-c6222eaad0b4 confirmed in 235.704 seconds
+index  settle                                                              status       block  seconds
+0      45a6f496f386b2c26faf65b5870d526c3c3543ec5d4e103024d1bd124650b5f8    confirmed    5310357  234.769
+1      d390a1105906bad5e3326d89f392a01cc18074251b879b640d2fab5cf26f164f    confirmed    5310354  235.249
+2      21a6e098988ed2013421268de901e38bf959e531573e23854258c09a076859e3    confirmed    5310355  235.704
+3      -                                                                   start_failed  -      -
+4      -                                                                   start_failed  -      -
+Burst of 5: 3 confirmed in 3 distinct blocks, last confirmation after 235.704 seconds
+exit 0

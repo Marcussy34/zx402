@@ -1,0 +1,22 @@
+indexer: Chain tip changed during sync; retry on the next poll
+Indexer http://127.0.0.1:4010; relayer http://127.0.0.1:4011
+round: indexed 50
+round: insert 70961ea85d91085e03aae113a8c4bc1cc433075f9f22b952c3bd95f909586471 (1 deposits, 0 notes)
+round: indexed 1; asp 026b724292fb67aeac81cae70e7532ec25dbd2be6740f5a965a6f7f1bfb73400 (1 approvals)
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/fault","version":"1.0","servicename":"ogmios","fault":{"code":"client","string":"Invalid request: failed to decode payload from base64 or base16."},"reflection":{"id":"c4c933ad-280f-49ac-8aa1-6fb805316c8e"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/fault","version":"1.0","servicename":"ogmios","fault":{"code":"client","string":"Invalid request: failed to decode payload from base64 or base16."},"reflection":{"id":"da252571-421d-4e83-abf6-a3509677d96d"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/fault","version":"1.0","servicename":"ogmios","fault":{"code":"client","string":"Invalid request: failed to decode payload from base64 or base16."},"reflection":{"id":"0f299642-e96f-4f1f-8fb2-af096ec0cfee"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/fault","version":"1.0","servicename":"ogmios","fault":{"code":"client","string":"Invalid request: failed to decode payload from base64 or base16."},"reflection":{"id":"0bbcaade-0979-4ef6-94b5-97b1ac67deb3"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/fault","version":"1.0","servicename":"ogmios","fault":{"code":"client","string":"Invalid request: failed to decode payload from base64 or base16."},"reflection":{"id":"9f6bade7-5777-4ef7-b792-4f49a7d5d2ab"}}
+crank: {"type":"jsonwsp/fault","version":"1.0","servicename":"ogmios","fault":{"code":"client","string":"Invalid request: failed to decode payload from base64 or base16."},"reflection":{"id":"839dd4d9-ec5a-4be3-b6c9-e7641d3fe93d"}}
+round: indexed 1
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+round: indexed 1; insert 87a968d161e120da15f8ad5deb6ac12b2a7bc6f3f395aa636008a36c4d39cc69 (0 deposits, 3 notes); indexed 1
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+relayer: Could not build or submit the settle transaction: Payer needs an ADA-only collateral UTXO with at least 5 ADA
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll

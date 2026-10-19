@@ -1,0 +1,27 @@
+Relayer top-up 406c69c70c842d961cf16b974b4cb6bf88795de674606e050df2aa2e02fc4d1c submitted in 2.616 seconds
+Relayer top-up 406c69c70c842d961cf16b974b4cb6bf88795de674606e050df2aa2e02fc4d1c confirmed in 20.214 seconds
+Wallet 0 deposit 1ed5970c71a4e4566a395561d1c99d0d3cbf0378b8bf8ee06c6f11bd3500111f submitted in 3.843 seconds
+Wallet 0 note d0 spendable with 6000000 in 137.629 seconds
+Wallet 1 deposit 14ef87403d67c97e4ca1cb5a540b35343a70ed10371044c8f53f4dc068acd39f submitted in 4.955 seconds
+Wallet 1 note d0 spendable with 6000000 in 254.044 seconds
+Wallet 2 deposit 9e435d2638a4e5823cd62979c9d6ffcf929e30c8e09285202ea8fe4fa73805a5 submitted in 7.193 seconds
+Wallet 2 note d0 spendable with 6000000 in 153.248 seconds
+Wallet 3 deposit a4dd40421af8576b3f4eef45d981492dc66506863da12f7d7de078059b8b48ea submitted in 4.664 seconds
+Wallet 3 note d0 spendable with 6000000 in 186.981 seconds
+Wallet 4 deposit 8c01f978803333e4317beb124d12c122a1a307a849a86ed0884017029dab8ccf submitted in 5.342 seconds
+Wallet 4 note d0 spendable with 6000000 in 163.224 seconds
+All 5 wallets are spendable
+Wallet 0 settle failed to start: Could not build or submit the settle transaction
+Wallet 1 settle failed to start: Could not build or submit the settle transaction
+Wallet 2 settle failed to start: Could not build or submit the settle transaction
+Wallet 3 settle e312a808-105d-4dc9-b4a0-15d48267f5ea submitted as d3242c3f580703132d5d3b958f6f5eaf7369951086855a77bba83d4cf708ef34 in 148.267 seconds
+Wallet 4 settle failed to start: Could not build or submit the settle transaction
+Settle e312a808-105d-4dc9-b4a0-15d48267f5ea confirmed in 148.637 seconds
+index  settle                                                              status       block  seconds
+0      -                                                                   start_failed  -      -
+1      -                                                                   start_failed  -      -
+2      -                                                                   start_failed  -      -
+3      d3242c3f580703132d5d3b958f6f5eaf7369951086855a77bba83d4cf708ef34    confirmed    5310194  148.637
+4      -                                                                   start_failed  -      -
+Burst of 5: 1 confirmed in 1 distinct blocks, last confirmation after 148.637 seconds
+exit 0

@@ -1,0 +1,24 @@
+round: indexed 46
+Indexer http://127.0.0.1:4010; relayer http://127.0.0.1:4011
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"c49d51ae-ea76-42f2-94b7-49aa798e2456"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"b37ca832-781c-41ab-a2d5-5076f9893ff9"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"aa99dbf8-f599-440b-8a95-a1b57daeac08"}}
+indexer: Pool history has not reached the current pool UTXO
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"f623fa5b-e9fe-4b47-84b7-758ea5321847"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"8adde38a-bb5a-4bac-963f-0985408add7f"}}
+crank: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"6eeccc4a-0df4-413d-b777-c237b95f61c9"}}
+round: indexed 1
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"cf4efa79-f6a2-4107-b387-560bd66dafb6"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"AdditionalUtxoOverlap":[{"txId":"829a93398152899c657343625364dd54a5b9a297a409bdcc53345e79e9b84c09","index":0},{"txId":"829a93398152899c657343625364dd54a5b9a297a409bdcc53345e79e9b84c09","index":2}]}},"reflection":{"id":"bc1b83a8-ea0c-4295-b4ed-5ae3c40b2c92"}}
+crank: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"ScriptFailures":{}}},"reflection":{"id":"a66e6976-7643-4757-a6f9-3f35be79b028"}}
+relayer: Could not build or submit the settle transaction: {"type":"jsonwsp/response","version":"1.0","servicename":"ogmios","methodname":"EvaluateTx","result":{"EvaluationFailure":{"AdditionalUtxoOverlap":[{"txId":"02432090cd9404e7642406a2a793665503026ac99ac42a4e1f7192de9b304327","index":0}]}},"reflection":{"id":"1b3b2d47-105c-4941-bcc0-a38f7ae0ce01"}}
+indexer: Pool history has not reached the current pool UTXO
+round: indexed 1; insert 3e6d18bf0da88424b1d45294f5d685bb0064fc2e5b602cdef8190bda0e9d60ff (0 deposits, 3 notes)
+round: indexed 1
+indexer: Chain tip changed during sync; retry on the next poll
+round: indexed 1
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll
+indexer: Chain tip changed during sync; retry on the next poll

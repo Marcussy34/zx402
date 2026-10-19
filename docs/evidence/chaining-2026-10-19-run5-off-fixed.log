@@ -1,0 +1,29 @@
+Relayer top-up f73ddb7a20df4f650ece2d80c8a93885f0de0b690ed8722a008e23e2e30e529d of 30000000 lovelace submitted in 3.146 seconds
+Relayer top-up f73ddb7a20df4f650ece2d80c8a93885f0de0b690ed8722a008e23e2e30e529d confirmed in 46.134 seconds
+Wallet 0 deposit 872b86a7037ff83e7d5a3b517bef037661dd9930dacfcc9bc2baf2e7a308e0f7 submitted in 6.498 seconds
+Wallet 0 note d1 spendable with 6000000 in 156.274 seconds
+Wallet 1 deposit c5c6cf8bf787d59cd456fb6d96243762ba69de8064c0fa6ffbb110b8bee8f983 submitted in 11.262 seconds
+Wallet 1 note d1 spendable with 6000000 in 206.839 seconds
+Wallet 2 reuses note c7
+Wallet 3 reuses note c9
+Wallet 4 deposit b3b15ac059f5d19685d562d3c59316c89736e2483c831a48c7c724f4a8ff71fc submitted in 8.132 seconds
+Wallet 4 note d1 spendable with 6000000 in 212.888 seconds
+All 5 wallets are spendable
+Wallet 0 settle 7ac9d35c-1e42-4a24-9072-318c593c8c9c submitted as 264869f1f74fc006aca8d2282c2da44006f8c3f1813ee2d7215a1da2a1a6c5ed in 254.575 seconds
+Wallet 1 settle bc15546b-b540-4c02-8f71-171646181914 submitted as 942ad136467cab58f206dbb5b51b9ca542bb77c46c1c00fb8a1f0abb7ab22100 in 254.575 seconds
+Wallet 2 settle 9df032fc-eb23-48b5-a9bf-42632302c680 submitted as ab22bcb151ddbd9a0892bfa082f8c9ceaf8f85dde63ba037ce1a2125b29caa7d in 254.575 seconds
+Wallet 3 settle d8649b14-6aa1-4ef2-b511-610b4a8a5f2d submitted as 4ec2525e17fd4e2b3496440e0bbff83a34e8d4fe27c5e570d2276bf6dc4aa8cb in 254.575 seconds
+Wallet 4 settle fbd5a0b1-484c-4c76-85bf-6c53b5e318ba submitted as 95fbbd424a53fcc14d1e4343b4266c33461baa2d38621b04b12e74b4c4bc28ff in 254.576 seconds
+Settle 7ac9d35c-1e42-4a24-9072-318c593c8c9c confirmed in 255.017 seconds
+Settle bc15546b-b540-4c02-8f71-171646181914 confirmed in 255.481 seconds
+Settle d8649b14-6aa1-4ef2-b511-610b4a8a5f2d confirmed in 255.955 seconds
+Settle fbd5a0b1-484c-4c76-85bf-6c53b5e318ba confirmed in 256.412 seconds
+Settle 9df032fc-eb23-48b5-a9bf-42632302c680 confirmed in 296.028 seconds
+index  settle                                                              status       block  seconds
+0      264869f1f74fc006aca8d2282c2da44006f8c3f1813ee2d7215a1da2a1a6c5ed    confirmed    5310450  255.017
+1      942ad136467cab58f206dbb5b51b9ca542bb77c46c1c00fb8a1f0abb7ab22100    confirmed    5310455  255.481
+2      ab22bcb151ddbd9a0892bfa082f8c9ceaf8f85dde63ba037ce1a2125b29caa7d    confirmed    5310457  296.028
+3      4ec2525e17fd4e2b3496440e0bbff83a34e8d4fe27c5e570d2276bf6dc4aa8cb    confirmed    5310449  255.955
+4      95fbbd424a53fcc14d1e4343b4266c33461baa2d38621b04b12e74b4c4bc28ff    confirmed    5310453  256.412
+Burst of 5: 5 confirmed in 5 distinct blocks, last confirmation after 296.028 seconds
+exit 0
