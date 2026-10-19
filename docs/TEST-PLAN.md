@@ -204,6 +204,7 @@ If a bound cannot be met, change the Spec estimate first, then the bound.
 | TX-13 | The FakeChain reports a transaction as in the mempool, confirmed, or unknown, and a spent input is a `SubmitRejected` with reason `bad_inputs` |
 | TX-14 | Blockfrost submit sorts a 400 answer into `SubmitRejected` (`bad_inputs` or `other`) and any other failure into an unknown outcome; `transactionStatus` reads the chain, then the mempool |
 | TX-15 | Insert and ASP update transactions carry an upper validity bound, 600,000 ms ahead by default |
+| TX-16 | Evaluation with additional UTXOs sends the Ogmios v5 shape itself (dotted asset keys, inline datum as `datum`), refuses a reference script and an unsafe quantity, and turns an `EvaluationFailure` into a `ScriptFailure` |
 
 ## 11. Services and SDK
 

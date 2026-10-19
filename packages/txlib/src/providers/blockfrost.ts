@@ -10,6 +10,7 @@ import {
 /** The Mesh methods used by this adapter. Tests supply the same interface. */
 export interface MeshProviderLike {
   get: BlockfrostProvider['get'];
+  post: BlockfrostProvider['post'];
   fetchUTxOs: BlockfrostProvider['fetchUTxOs'];
   fetchLatestBlock: BlockfrostProvider['fetchLatestBlock'];
   evaluateTx: BlockfrostProvider['evaluateTx'];
@@ -68,6 +69,52 @@ export function utxoToMesh(u: Utxo): UTxO {
       ...(u.scriptRef === null ? {} : { scriptRef: u.scriptRef.cbor, scriptHash: u.scriptRef.hash }),
     },
   };
+}
+
+/** One additional UTXO as the input and output pair in Ogmios v5 JSON. */
+export type OgmiosAdditionalUtxo = [
+  { txId: string; index: number },
+  {
+    address: string;
+    value: { coins: number; assets?: Record<string, number> };
+    datumHash?: string;
+    datum?: string;
+  },
+];
+
+// The evaluate endpoint takes JSON numbers, so a quantity must fit a safe integer.
+function ogmiosQuantity(quantity: bigint, unit: string): number {
+  if (quantity < 0n || quantity > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`Quantity of ${unit} does not fit a safe integer`);
+  }
+  return Number(quantity);
+}
+
+/**
+ * Converts a UTXO to the Ogmios v5 shape Blockfrost evaluates.
+ * Mesh 1.9.1 drops datums and nests assets by policy, so adapters send this body themselves.
+ */
+export function ogmiosAdditionalUtxo(u: Utxo): OgmiosAdditionalUtxo {
+  // A dropped reference script would change the evaluation result, so refuse it loudly.
+  if (u.scriptRef !== null) throw new Error('A reference script in an additional UTXO cannot be evaluated');
+  const assets: Record<string, number> = {};
+  for (const [unit, quantity] of Object.entries(u.value.assets)) {
+    // A unit is the 56-character policy ID followed by the asset name, which may be empty.
+    const policy = unit.slice(0, 56), name = unit.slice(56);
+    assets[name ? `${policy}.${name}` : policy] = ogmiosQuantity(quantity, unit);
+  }
+  return [
+    { txId: u.ref.txId, index: u.ref.index },
+    {
+      address: u.address,
+      value: {
+        coins: ogmiosQuantity(u.value.lovelace, 'lovelace'),
+        ...(Object.keys(assets).length === 0 ? {} : { assets }),
+      },
+      ...(u.inlineDatum === null ? {} : { datum: u.inlineDatum }),
+      ...(u.datumHash === null ? {} : { datumHash: u.datumHash }),
+    },
+  ];
 }
 
 // Mesh can stringify a provider error twice before throwing it.
@@ -224,14 +271,32 @@ function adapt(mesh: MeshProviderLike, projectId: string): Provider & TxStatusRe
       return { slot: Number(block.slot), blockHash: block.hash, time: block.time * 1000 };
     }, projectId),
     evaluate: (txCbor, additionalUtxos = []) => request(async () => {
-      const actions = await mesh.evaluateTx(txCbor, additionalUtxos.map(utxoToMesh));
-      const tags: Record<(typeof actions)[number]['tag'], RedeemerTag> = {
-        SPEND: 'spend', MINT: 'mint', CERT: 'cert', REWARD: 'reward', VOTE: 'vote', PROPOSE: 'propose',
+      if (additionalUtxos.length === 0) {
+        const actions = await mesh.evaluateTx(txCbor, []);
+        const tags: Record<(typeof actions)[number]['tag'], RedeemerTag> = {
+          SPEND: 'spend', MINT: 'mint', CERT: 'cert', REWARD: 'reward', VOTE: 'vote', PROPOSE: 'propose',
+        };
+        return actions.map(action => {
+          const tag = tags[action.tag];
+          if (!tag) throw new Error('Unsupported evaluation redeemer tag');
+          return { tag, index: action.index, mem: BigInt(action.budget.mem), steps: BigInt(action.budget.steps) };
+        });
+      }
+      // Mesh 1.9.1 sends an incomplete additional UTXO set, so post the Ogmios v5 body directly.
+      const body = await mesh.post('utils/txs/evaluate/utxos', {
+        cbor: txCbor, additionalUtxoSet: additionalUtxos.map(ogmiosAdditionalUtxo),
+      });
+      const rated = body?.result?.EvaluationResult as Record<string, { memory: number; steps: number }> | undefined;
+      // Let providerError inspect the body so an EvaluationFailure becomes a ScriptFailure.
+      if (!rated) throw new Error(JSON.stringify(body));
+      const tags: Record<string, RedeemerTag> = {
+        spend: 'spend', mint: 'mint', certificate: 'cert', withdrawal: 'reward',
       };
-      return actions.map(action => {
-        const tag = tags[action.tag];
+      return Object.entries(rated).map(([key, budget]) => {
+        const [purpose, index] = key.split(':');
+        const tag = tags[purpose!];
         if (!tag) throw new Error('Unsupported evaluation redeemer tag');
-        return { tag, index: action.index, mem: BigInt(action.budget.mem), steps: BigInt(action.budget.steps) };
+        return { tag, index: Number(index), mem: BigInt(budget.memory), steps: BigInt(budget.steps) };
       });
     }, projectId),
     transactionStatus: (txId): Promise<TxStatus> => request(async () => {
